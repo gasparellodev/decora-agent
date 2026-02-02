@@ -184,7 +184,7 @@ export async function executeCalculateShipping(
     height?: number
     quantity?: number
     source?: 'whatsapp' | 'mercadolivre' | 'shopify'
-    window_type?: 'capelinha' | '2f' | '2f_grade' | '3f' | '3f_tela' | '3f_grade' | '3f_grade_tela'
+    window_type?: 'capelinha' | 'capelinha_3v' | '2f' | '2f_grade' | '3f' | '3f_tela' | '3f_grade' | '3f_tela_grade'
   }
 ): Promise<CalculateShippingResult> {
   const { calculateWindowFreight } = await import('@/lib/providers/melhor-envio')
@@ -296,12 +296,13 @@ export async function executeGetProductInfo(
     getProductPrice, 
     isKitArremate, 
     canSellOnChannel,
-    formatProductName,
-    ProductType,
-    ProductColor,
-    SalesChannel,
-    PaymentMethod
+    formatProductName
   } = await import('@/lib/services/product-price.service')
+  
+  type ProductType = '2f' | '2f_grade' | '3f' | '3f_grade' | '3f_tela' | '3f_tela_grade' | 'capelinha' | 'capelinha_3v' | 'arremate'
+  type ProductColor = 'branco' | 'preto'
+  type SalesChannel = 'whatsapp' | 'mercadolivre' | 'shopify'
+  type PaymentMethod = 'cartao' | 'boleto' | 'pix'
   
   const tipo = input.model as ProductType
   const cor = (input.color || 'branco') as ProductColor

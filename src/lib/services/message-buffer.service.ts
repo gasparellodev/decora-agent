@@ -56,7 +56,7 @@ export function bufferMessage(
     if (firstMessageAge > MAX_BUFFER_AGE_MS) {
       // Buffer muito antigo, processar imediatamente e criar novo
       processBufferedMessages(leadId)
-      buffer = null
+      buffer = undefined
     }
   }
   

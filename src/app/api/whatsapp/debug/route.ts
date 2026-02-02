@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
       : { error: connectionStateResult.reason?.message || 'Failed to get connection state' }
     
     const webhook = webhookResult.status === 'fulfilled'
-      ? webhookResult.value
+      ? webhookResult.value as { url?: string; [key: string]: unknown } | null
       : { error: webhookResult.reason?.message || 'Failed to get webhook' }
     
     const instances = instancesResult.status === 'fulfilled'
@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
                        `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/evolution`
 
     // Extrair o estado corretamente (suporta formato novo e antigo)
-    const extractedState = connectionState 
+    const extractedState = connectionState && 'instance' in connectionState
       ? EvolutionProvider.extractState(connectionState)
       : 'unknown'
 
@@ -88,8 +88,8 @@ export async function GET(request: NextRequest) {
         webhook_reachable: !webhookUrl.includes('localhost'),
         instance_exists: connectionStateResult.status === 'fulfilled',
         is_connected: extractedState === 'open',
-        has_webhook_configured: webhookResult.status === 'fulfilled' && webhook?.url,
-        webhook_url_matches: webhook?.url === webhookUrl
+        has_webhook_configured: webhookResult.status === 'fulfilled' && webhook && 'url' in webhook && !!webhook.url,
+        webhook_url_matches: webhook && 'url' in webhook && webhook.url === webhookUrl
       }
     })
   } catch (error) {

@@ -7,7 +7,8 @@ import {
   getItemDimensions,
   getItem,
   extractWindowTypeFromTitle,
-  type WindowType
+  type WindowType,
+  type ProductDimensions
 } from '@/lib/providers/mercadolivre'
 import {
   calculateWindowFreight,
@@ -130,7 +131,7 @@ export async function POST(request: NextRequest) {
     let answerText: string
     let freightValue: number | null = null
     let freightIsSP = false
-    let dimensions = { width: 100, height: 50, source: 'default' as const }
+    let dimensions: ProductDimensions = { width: 100, height: 50, source: 'default' }
     let tokensUsed = 0
     let needsHumanReview = false
     let aiDisabledReason: string | null = null

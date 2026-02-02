@@ -182,7 +182,7 @@ MEDIDAS RECOMENDADAS POR AMBIENTE:
 
 ## LOGÍSTICA POR REGIÃO
 ${isSP ? `
-🟢 CLIENTE DE SÃO PAULO (CEP ${lead.cep})
+🟢 CLIENTE DE SÃO PAULO ${lead?.cep ? `(CEP ${lead.cep})` : ''}
 - Entrega pela frota própria da Decora
 - Entregas sempre às QUINTAS-FEIRAS
 - Comprou até segunda → entrega na quinta da mesma semana
@@ -191,7 +191,7 @@ ${isSP ? `
 - Frete grátis acima de R$500
 - URGÊNCIA NÃO DISPONÍVEL para SP
 ` : `
-🔵 CLIENTE FORA DE SÃO PAULO ${lead.cep ? `(CEP ${lead.cep})` : ''}
+🔵 CLIENTE FORA DE SÃO PAULO ${lead?.cep ? `(CEP ${lead.cep})` : ''}
 - Envio via transportadora (Melhor Envio)
 - Prazo: 5-7 dias produção + 3-7 dias transporte
 - Receberá código de rastreio quando etiqueta for paga
@@ -239,8 +239,8 @@ ${isSP ? `
 
 ## CLIENTE ATUAL
 Nome: ${clientName}
-Telefone: ${lead.phone}
-${lead.cep ? `CEP: ${lead.cep} (${isSP ? 'São Paulo - entrega própria' : 'Fora de SP - transportadora'})` : 'CEP: não informado'}
+Telefone: ${lead?.phone || 'não informado'}
+${lead?.cep ? `CEP: ${lead.cep} (${isSP ? 'São Paulo - entrega própria' : 'Fora de SP - transportadora'})` : 'CEP: não informado'}
 ${hasActiveOrders ? `
 📦 PEDIDOS ATIVOS:
 ${orders?.map(o => `- #${o.order_number}: ${translateStatus(o.production_status)}`).join('\n')}
