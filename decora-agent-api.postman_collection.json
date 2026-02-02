@@ -1,0 +1,994 @@
+{
+	"info": {
+		"_postman_id": "decora-agent-api-collection",
+		"name": "Decora Agent API",
+		"description": "Collection completa da API do Decora Agent - Sistema de vendas via WhatsApp com IA.\n\n## Configuração\n\n1. Importe esta collection no Postman\n2. Configure as variáveis de ambiente:\n   - `BASE_URL`: URL da aplicação (ex: http://localhost:3000)\n   - `CRON_SECRET`: Secret para autenticação do cron job\n   - `SHOPIFY_WEBHOOK_SECRET`: Secret do Shopify (opcional)\n   - `YAMPI_WEBHOOK_SECRET`: Secret do Yampi (opcional)\n   - `MELHOR_ENVIO_SECRET`: Secret do Melhor Envio (opcional)\n\n## Autenticação\n\nA maioria dos endpoints requer autenticação via cookie de sessão do Supabase.\nPara testar, faça login na aplicação web primeiro e copie os cookies.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "BASE_URL",
+			"value": "http://localhost:3000",
+			"type": "string"
+		},
+		{
+			"key": "CRON_SECRET",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "SHOPIFY_WEBHOOK_SECRET",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "YAMPI_WEBHOOK_SECRET",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "MELHOR_ENVIO_SECRET",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "WhatsApp",
+			"description": "Endpoints para gerenciamento da conexão e envio de mensagens via WhatsApp (Evolution API).",
+			"item": [
+				{
+					"name": "Enviar Mensagem",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"phone\": \"5511999999999\",\n    \"message\": \"Olá! Esta é uma mensagem de teste.\",\n    \"lead_id\": \"\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{BASE_URL}}/api/whatsapp/send",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "whatsapp", "send"]
+						},
+						"description": "Envia uma mensagem de texto via WhatsApp.\n\n**Parâmetros:**\n- `phone` (obrigatório): Número de telefone no formato internacional (ex: 5511999999999)\n- `message` (obrigatório): Texto da mensagem a ser enviada\n- `lead_id` (opcional): UUID do lead para salvar a mensagem no histórico\n\n**Autenticação:** Requer sessão autenticada (cookie)"
+					},
+					"response": [
+						{
+							"name": "Sucesso",
+							"originalRequest": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"phone\": \"5511999999999\",\n    \"message\": \"Olá! Esta é uma mensagem de teste.\"\n}"
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/whatsapp/send",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "whatsapp", "send"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"success\": true\n}"
+						},
+						{
+							"name": "Erro - Não autenticado",
+							"originalRequest": {
+								"method": "POST",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/whatsapp/send",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "whatsapp", "send"]
+								}
+							},
+							"status": "Unauthorized",
+							"code": 401,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"error\": \"Unauthorized\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Verificar Status da Conexão",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{BASE_URL}}/api/whatsapp/connect",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "whatsapp", "connect"]
+						},
+						"description": "Verifica o status atual da conexão WhatsApp.\n\nRetorna informações sobre:\n- Se está conectado ou não\n- Status atual (connected, connecting, disconnected)\n- Número de telefone conectado\n- QR code (se estiver aguardando conexão)\n\n**Autenticação:** Requer sessão autenticada (cookie)"
+					},
+					"response": [
+						{
+							"name": "Conectado",
+							"originalRequest": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/whatsapp/connect",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "whatsapp", "connect"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"connected\": true,\n    \"status\": \"connected\",\n    \"instance\": \"decora-main\",\n    \"phone_number\": \"5511999999999\",\n    \"connected_at\": \"2024-01-15T10:30:00Z\",\n    \"evolution_state\": \"open\"\n}"
+						},
+						{
+							"name": "Aguardando QR Code",
+							"originalRequest": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/whatsapp/connect",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "whatsapp", "connect"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"connected\": false,\n    \"status\": \"connecting\",\n    \"instance\": \"decora-main\",\n    \"qr_code\": \"base64_encoded_qr_code_here\",\n    \"evolution_state\": \"connecting\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Conectar WhatsApp",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{BASE_URL}}/api/whatsapp/connect",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "whatsapp", "connect"]
+						},
+						"description": "Inicia o processo de conexão do WhatsApp.\n\nSe já estiver conectado, retorna sucesso imediato.\nSe não estiver conectado, gera um novo QR code para escaneamento.\n\nO webhook é configurado automaticamente para receber eventos da Evolution API.\n\n**Autenticação:** Requer sessão autenticada (cookie)"
+					},
+					"response": [
+						{
+							"name": "QR Code Gerado",
+							"originalRequest": {
+								"method": "POST",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/whatsapp/connect",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "whatsapp", "connect"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"success\": true,\n    \"instance\": \"decora-main\",\n    \"qr_code\": \"base64_encoded_qr_code_here\",\n    \"pairing_code\": \"ABC-DEFGH\",\n    \"qr_count\": 1,\n    \"webhook_url\": \"https://seu-dominio.com/api/webhooks/evolution\"\n}"
+						},
+						{
+							"name": "Já Conectado",
+							"originalRequest": {
+								"method": "POST",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/whatsapp/connect",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "whatsapp", "connect"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"success\": true,\n    \"instance\": \"decora-main\",\n    \"already_connected\": true,\n    \"message\": \"WhatsApp já está conectado\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Debug Integração",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{BASE_URL}}/api/whatsapp/debug",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "whatsapp", "debug"]
+						},
+						"description": "Endpoint de debug para verificar a configuração completa da integração WhatsApp.\n\nRetorna informações detalhadas sobre:\n- Estado da conexão na Evolution API\n- Configuração do webhook\n- Dados salvos no banco de dados\n- Variáveis de ambiente configuradas\n- Diagnósticos de problemas comuns\n\n**Autenticação:** Requer sessão autenticada (cookie)"
+					},
+					"response": [
+						{
+							"name": "Debug Info",
+							"originalRequest": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/whatsapp/debug",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "whatsapp", "debug"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"timestamp\": \"2024-01-15T10:30:00Z\",\n    \"instance_name\": \"decora-main\",\n    \"evolution_api\": {\n        \"url\": \"https://evolution.exemplo.com\",\n        \"connection_state\": { \"state\": \"open\" },\n        \"webhook_config\": { \"url\": \"https://app.exemplo.com/api/webhooks/evolution\" },\n        \"all_instances\": []\n    },\n    \"database\": {\n        \"connection\": { \"status\": \"connected\" },\n        \"status\": \"connected\",\n        \"has_qr_code\": false\n    },\n    \"environment\": {\n        \"evolution_api_url\": \"https://evolution.exemplo.com\",\n        \"webhook_url\": \"https://app.exemplo.com/api/webhooks/evolution\",\n        \"is_localhost\": false\n    },\n    \"diagnostics\": {\n        \"webhook_reachable\": true,\n        \"instance_exists\": true,\n        \"is_connected\": true,\n        \"has_webhook_configured\": true,\n        \"webhook_url_matches\": true\n    }\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Agent",
+			"description": "Endpoints do agente de IA para processamento de follow-ups e automações.",
+			"item": [
+				{
+					"name": "Processar Follow-ups (Cron)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{CRON_SECRET}}",
+								"description": "Token de autenticação para o cron job"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{BASE_URL}}/api/agent/followup",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "agent", "followup"]
+						},
+						"description": "Processa os follow-ups pendentes que já passaram da hora agendada.\n\nEste endpoint deve ser chamado periodicamente por um cron job (recomendado: a cada 5 minutos).\n\nO sistema irá:\n1. Buscar follow-ups pendentes com scheduled_for <= agora\n2. Gerar mensagens personalizadas com IA (quando necessário)\n3. Enviar via WhatsApp\n4. Atualizar status do follow-up\n5. Salvar mensagem no histórico\n\n**Autenticação:** Bearer token (CRON_SECRET)"
+					},
+					"response": [
+						{
+							"name": "Follow-ups Processados",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{CRON_SECRET}}"
+									}
+								],
+								"url": {
+									"raw": "{{BASE_URL}}/api/agent/followup",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "agent", "followup"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"processed\": 3,\n    \"failed\": 0,\n    \"total\": 3,\n    \"timestamp\": \"2024-01-15T10:30:00Z\"\n}"
+						},
+						{
+							"name": "Nenhum Pendente",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{CRON_SECRET}}"
+									}
+								],
+								"url": {
+									"raw": "{{BASE_URL}}/api/agent/followup",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "agent", "followup"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"processed\": 0,\n    \"message\": \"No pending follow-ups\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Health Check Follow-ups",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{BASE_URL}}/api/agent/followup",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "agent", "followup"]
+						},
+						"description": "Health check do serviço de follow-ups.\n\nRetorna a contagem de follow-ups pendentes que estão prontos para processamento.\n\n**Autenticação:** Nenhuma"
+					},
+					"response": [
+						{
+							"name": "Status OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/agent/followup",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "agent", "followup"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"body": "{\n    \"status\": \"ok\",\n    \"service\": \"follow-up-cron\",\n    \"pending_followups\": 5,\n    \"timestamp\": \"2024-01-15T10:30:00Z\"\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Integrations",
+			"description": "Endpoints para integrações com sistemas externos (Bling ERP, etc).",
+			"item": [
+				{
+					"name": "Bling - Iniciar OAuth",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{BASE_URL}}/api/integrations/bling/auth",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "integrations", "bling", "auth"]
+						},
+						"description": "Inicia o fluxo de autenticação OAuth2 com o Bling ERP.\n\nRedireciona o usuário para a página de autorização do Bling, onde ele deve conceder permissões ao aplicativo.\n\nApós autorização, o usuário é redirecionado de volta para o callback.\n\n**Autenticação:** Requer sessão autenticada (cookie)\n\n**Nota:** Este endpoint redireciona (HTTP 302), não retorna JSON."
+					},
+					"response": []
+				},
+				{
+					"name": "Bling - Callback OAuth",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{BASE_URL}}/api/integrations/bling/callback?code=authorization_code_here",
+							"host": ["{{BASE_URL}}"],
+							"path": ["api", "integrations", "bling", "callback"],
+							"query": [
+								{
+									"key": "code",
+									"value": "authorization_code_here",
+									"description": "Código de autorização retornado pelo Bling"
+								}
+							]
+						},
+						"description": "Callback do OAuth2 do Bling.\n\nEste endpoint é chamado automaticamente pelo Bling após o usuário autorizar o aplicativo.\n\nRecebe o código de autorização e troca por tokens de acesso.\n\nApós sucesso, redireciona para /integrations?success=bling_connected\n\n**Parâmetros:**\n- `code`: Código de autorização (sucesso)\n- `error`: Código de erro (falha)\n\n**Nota:** Este endpoint redireciona (HTTP 302), não retorna JSON."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Webhooks",
+			"description": "Endpoints públicos para receber eventos de sistemas externos (Evolution API, Shopify, Yampi, Melhor Envio).",
+			"item": [
+				{
+					"name": "Evolution API",
+					"description": "Webhooks da Evolution API (WhatsApp).",
+					"item": [
+						{
+							"name": "Receber Evento",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"event\": \"MESSAGES_UPSERT\",\n    \"instance\": \"decora-main\",\n    \"data\": {\n        \"key\": {\n            \"remoteJid\": \"5511999999999@s.whatsapp.net\",\n            \"fromMe\": false,\n            \"id\": \"ABC123\"\n        },\n        \"pushName\": \"João Silva\",\n        \"message\": {\n            \"conversation\": \"Olá, gostaria de saber mais sobre as janelas!\"\n        }\n    }\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/evolution",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "evolution"]
+								},
+								"description": "Recebe eventos da Evolution API.\n\n**Eventos suportados:**\n- `MESSAGES_UPSERT`: Nova mensagem recebida\n- `CONNECTION_UPDATE`: Mudança no status da conexão\n- `QRCODE_UPDATED`: Novo QR code gerado\n\n**Autenticação:** Nenhuma (webhook público)"
+							},
+							"response": [
+								{
+									"name": "Mensagem Processada",
+									"originalRequest": {
+										"method": "POST",
+										"header": [],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"event\": \"MESSAGES_UPSERT\",\n    \"instance\": \"decora-main\",\n    \"data\": {\n        \"key\": {\n            \"remoteJid\": \"5511999999999@s.whatsapp.net\",\n            \"fromMe\": false,\n            \"id\": \"ABC123\"\n        },\n        \"pushName\": \"João Silva\",\n        \"message\": {\n            \"conversation\": \"Olá!\"\n        }\n    }\n}"
+										},
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/evolution",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "evolution"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"ok\": true,\n    \"lead_id\": \"uuid-do-lead\",\n    \"conversation_id\": \"uuid-da-conversa\"\n}"
+								},
+								{
+									"name": "Conexão Atualizada",
+									"originalRequest": {
+										"method": "POST",
+										"header": [],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"event\": \"CONNECTION_UPDATE\",\n    \"instance\": \"decora-main\",\n    \"data\": {\n        \"state\": \"open\",\n        \"ownerJid\": \"5511999999999@s.whatsapp.net\"\n    }\n}"
+										},
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/evolution",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "evolution"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"ok\": true,\n    \"status\": \"connected\"\n}"
+								}
+							]
+						},
+						{
+							"name": "Health Check",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/evolution",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "evolution"]
+								},
+								"description": "Health check do webhook da Evolution API."
+							},
+							"response": [
+								{
+									"name": "Status OK",
+									"originalRequest": {
+										"method": "GET",
+										"header": [],
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/evolution",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "evolution"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"status\": \"ok\",\n    \"service\": \"evolution-webhook\",\n    \"timestamp\": \"2024-01-15T10:30:00Z\",\n    \"supported_events\": [\"MESSAGES_UPSERT\", \"CONNECTION_UPDATE\", \"QRCODE_UPDATED\"]\n}"
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Shopify",
+					"description": "Webhooks do Shopify para sincronização de pedidos.",
+					"item": [
+						{
+							"name": "Receber Evento - Pedido Criado",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "x-shopify-topic",
+										"value": "orders/create",
+										"description": "Tipo do evento Shopify"
+									},
+									{
+										"key": "x-shopify-hmac-sha256",
+										"value": "{{SHOPIFY_HMAC}}",
+										"description": "Assinatura HMAC para validação"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"id\": 123456789,\n    \"name\": \"#1001\",\n    \"order_number\": 1001,\n    \"total_price\": \"299.90\",\n    \"financial_status\": \"paid\",\n    \"fulfillment_status\": null,\n    \"created_at\": \"2024-01-15T10:30:00Z\",\n    \"customer\": {\n        \"id\": 987654321,\n        \"first_name\": \"João\",\n        \"last_name\": \"Silva\",\n        \"email\": \"joao@email.com\",\n        \"phone\": \"+5511999999999\"\n    },\n    \"shipping_address\": {\n        \"first_name\": \"João\",\n        \"last_name\": \"Silva\",\n        \"phone\": \"+5511999999999\",\n        \"address1\": \"Rua Exemplo, 123\",\n        \"city\": \"São Paulo\",\n        \"province\": \"SP\",\n        \"zip\": \"01234-567\",\n        \"country\": \"Brazil\"\n    },\n    \"line_items\": [\n        {\n            \"id\": 111222333,\n            \"title\": \"Janela de Correr 2 Folhas\",\n            \"quantity\": 1,\n            \"price\": \"299.90\"\n        }\n    ]\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/shopify",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "shopify"]
+								},
+								"description": "Recebe eventos de pedidos do Shopify.\n\n**Topics suportados:**\n- `orders/create`: Novo pedido criado\n- `orders/updated`: Pedido atualizado\n- `orders/paid`: Pagamento confirmado\n- `orders/fulfilled`: Pedido despachado\n\n**Headers:**\n- `x-shopify-topic`: Tipo do evento\n- `x-shopify-hmac-sha256`: Assinatura HMAC-SHA256 do body\n\n**Autenticação:** Validação via HMAC-SHA256"
+							},
+							"response": [
+								{
+									"name": "Pedido Processado",
+									"originalRequest": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "x-shopify-topic",
+												"value": "orders/create"
+											}
+										],
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/shopify",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "shopify"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"ok\": true\n}"
+								}
+							]
+						},
+						{
+							"name": "Receber Evento - Pedido Enviado",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "x-shopify-topic",
+										"value": "orders/fulfilled",
+										"description": "Tipo do evento Shopify"
+									},
+									{
+										"key": "x-shopify-hmac-sha256",
+										"value": "{{SHOPIFY_HMAC}}",
+										"description": "Assinatura HMAC para validação"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"id\": 123456789,\n    \"name\": \"#1001\",\n    \"fulfillment_status\": \"fulfilled\",\n    \"fulfillments\": [\n        {\n            \"id\": 555666777,\n            \"tracking_number\": \"BR123456789BR\",\n            \"tracking_company\": \"Correios\"\n        }\n    ]\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/shopify",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "shopify"]
+								},
+								"description": "Recebe evento de pedido enviado do Shopify.\n\nQuando um pedido é marcado como fulfilled (enviado), o sistema:\n1. Atualiza o status do pedido no banco\n2. Se houver código de rastreio, notifica o cliente via WhatsApp"
+							},
+							"response": []
+						},
+						{
+							"name": "Health Check",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/shopify",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "shopify"]
+								},
+								"description": "Health check do webhook do Shopify."
+							},
+							"response": [
+								{
+									"name": "Status OK",
+									"originalRequest": {
+										"method": "GET",
+										"header": [],
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/shopify",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "shopify"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"status\": \"ok\",\n    \"service\": \"shopify-webhook\",\n    \"timestamp\": \"2024-01-15T10:30:00Z\"\n}"
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Yampi",
+					"description": "Webhooks do Yampi para sincronização de pedidos e carrinhos abandonados.",
+					"item": [
+						{
+							"name": "Receber Evento - Carrinho Abandonado",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "x-yampi-hmac-sha256",
+										"value": "{{YAMPI_HMAC}}",
+										"description": "Assinatura HMAC para validação"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"event\": \"cart.reminder\",\n    \"resource\": {\n        \"id\": \"cart_123456\",\n        \"customer\": {\n            \"name\": \"João Silva\",\n            \"first_name\": \"João\",\n            \"phone\": \"5511999999999\",\n            \"email\": \"joao@email.com\"\n        },\n        \"items\": [\n            {\n                \"name\": \"Janela de Correr 2 Folhas\",\n                \"title\": \"Janela de Correr 2 Folhas\",\n                \"quantity\": 1,\n                \"price\": \"299.90\"\n            }\n        ]\n    }\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/yampi",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "yampi"]
+								},
+								"description": "Recebe notificação de carrinho abandonado do Yampi.\n\nQuando recebido, o sistema cria automaticamente 3 follow-ups:\n1. 1 hora depois (sem desconto)\n2. 1 dia depois (5% desconto)\n3. 3 dias depois (7% desconto)\n\n**Header:**\n- `x-yampi-hmac-sha256`: Assinatura HMAC-SHA256"
+							},
+							"response": []
+						},
+						{
+							"name": "Receber Evento - Pedido Criado",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "x-yampi-hmac-sha256",
+										"value": "{{YAMPI_HMAC}}",
+										"description": "Assinatura HMAC para validação"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"event\": \"order.created\",\n    \"resource\": {\n        \"id\": 123456,\n        \"number\": \"1001\",\n        \"total\": \"299.90\",\n        \"status\": {\n            \"data\": {\n                \"name\": \"pendente\"\n            }\n        },\n        \"customer\": {\n            \"name\": \"João Silva\",\n            \"first_name\": \"João\",\n            \"last_name\": \"Silva\",\n            \"phone\": \"5511999999999\",\n            \"email\": \"joao@email.com\"\n        }\n    }\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/yampi",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "yampi"]
+								},
+								"description": "Recebe eventos de pedidos do Yampi.\n\n**Eventos suportados:**\n- `order.created`: Pedido criado\n- `order.paid`: Pagamento confirmado\n- `order.invoiced`: Nota fiscal emitida\n- `order.shipped`: Pedido enviado\n- `order.delivered`: Pedido entregue\n\nO sistema cancela automaticamente os follow-ups de carrinho abandonado quando um pedido é criado."
+							},
+							"response": []
+						},
+						{
+							"name": "Health Check",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/yampi",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "yampi"]
+								},
+								"description": "Health check do webhook do Yampi."
+							},
+							"response": [
+								{
+									"name": "Status OK",
+									"originalRequest": {
+										"method": "GET",
+										"header": [],
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/yampi",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "yampi"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"status\": \"ok\",\n    \"service\": \"yampi-webhook\",\n    \"timestamp\": \"2024-01-15T10:30:00Z\"\n}"
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Melhor Envio",
+					"description": "Webhooks do Melhor Envio para rastreamento de entregas.",
+					"item": [
+						{
+							"name": "Receber Evento - Atualização de Rastreio",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "x-me-signature",
+										"value": "{{MELHOR_ENVIO_SIGNATURE}}",
+										"description": "Assinatura HMAC-SHA256"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"tracking\": \"BR123456789BR\",\n    \"status\": \"delivered\",\n    \"description\": \"Objeto entregue ao destinatário\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/melhor-envio",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "melhor-envio"]
+								},
+								"description": "Recebe atualizações de rastreamento do Melhor Envio.\n\n**Status suportados:**\n- `posted`: Objeto postado\n- `in_transit`: Em trânsito\n- `out_for_delivery`: Saiu para entrega\n- `delivered`: Entregue\n- `first_failed_delivery_attempt`: Tentativa de entrega falhou\n- `returning`: Retornando ao remetente\n\nO sistema notifica o cliente via WhatsApp automaticamente em cada mudança de status.\n\nQuando entregue, cria follow-ups de pós-venda e avaliação.\n\n**Header:**\n- `x-me-signature`: Assinatura HMAC-SHA256 (hex)"
+							},
+							"response": [
+								{
+									"name": "Rastreio Atualizado",
+									"originalRequest": {
+										"method": "POST",
+										"header": [],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"tracking\": \"BR123456789BR\",\n    \"status\": \"delivered\",\n    \"description\": \"Objeto entregue\"\n}"
+										},
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/melhor-envio",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "melhor-envio"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"ok\": true\n}"
+								}
+							]
+						},
+						{
+							"name": "Health Check",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/melhor-envio",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "melhor-envio"]
+								},
+								"description": "Health check do webhook do Melhor Envio."
+							},
+							"response": [
+								{
+									"name": "Status OK",
+									"originalRequest": {
+										"method": "GET",
+										"header": [],
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/melhor-envio",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "melhor-envio"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"status\": \"ok\",\n    \"service\": \"melhor-envio-webhook\",\n    \"timestamp\": \"2024-01-15T10:30:00Z\"\n}"
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Mercado Livre",
+					"description": "Webhooks do Mercado Livre para perguntas, mensagens pós-venda e atualizações de pedidos.",
+					"item": [
+						{
+							"name": "Webhook Unificado",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"_id\": \"abc123\",\n    \"resource\": \"/questions/123456789\",\n    \"user_id\": 123456789,\n    \"topic\": \"questions\",\n    \"application_id\": 987654321,\n    \"attempts\": 1,\n    \"sent\": \"2024-01-15T10:30:00.000-04:00\",\n    \"received\": \"2024-01-15T10:30:00.000-04:00\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/mercadolivre",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "mercadolivre"]
+								},
+								"description": "Endpoint unificado para receber todas as notificações do Mercado Livre.\n\n**Tópicos suportados:**\n- `questions`: Perguntas de pré-venda\n- `messages`: Mensagens de pós-venda\n- `orders_v2`: Atualizações de pedidos\n- `shipments`: Atualizações de envios\n\nO webhook redireciona automaticamente para o handler específico baseado no tópico."
+							},
+							"response": [
+								{
+									"name": "Pergunta Processada",
+									"originalRequest": {
+										"method": "POST",
+										"header": [],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"topic\": \"questions\",\n    \"resource\": \"/questions/123456789\"\n}"
+										},
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/mercadolivre",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "mercadolivre"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"status\": \"processed\",\n    \"questionId\": \"123456789\",\n    \"cepFound\": true,\n    \"freightCalculated\": 55.00,\n    \"answered\": true\n}"
+								}
+							]
+						},
+						{
+							"name": "Webhook Perguntas (Pré-Venda)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"_id\": \"abc123\",\n    \"resource\": \"/questions/123456789\",\n    \"user_id\": 123456789,\n    \"topic\": \"questions\",\n    \"application_id\": 987654321,\n    \"attempts\": 1,\n    \"sent\": \"2024-01-15T10:30:00.000-04:00\",\n    \"received\": \"2024-01-15T10:30:00.000-04:00\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/mercadolivre/questions",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "mercadolivre", "questions"]
+								},
+								"description": "Processa perguntas de pré-venda do Mercado Livre.\n\n**Fluxo:**\n1. Recebe notificação de nova pergunta\n2. Busca detalhes da pergunta na API do ML\n3. Extrai CEP da mensagem (se houver)\n4. Calcula frete:\n   - CEP 0* (Grande SP): R$55 fixo\n   - Outros: API Melhor Envio\n5. Responde automaticamente com valor do frete e instruções de pagamento"
+							},
+							"response": []
+						},
+						{
+							"name": "Webhook Mensagens (Pós-Venda)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"_id\": \"abc123\",\n    \"resource\": \"/messages/packs/123456789/sellers/987654321\",\n    \"user_id\": 987654321,\n    \"topic\": \"messages\",\n    \"application_id\": 111222333,\n    \"attempts\": 1,\n    \"sent\": \"2024-01-15T10:30:00.000-04:00\",\n    \"received\": \"2024-01-15T10:30:00.000-04:00\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/mercadolivre/messages",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "mercadolivre", "messages"]
+								},
+								"description": "Processa mensagens de pós-venda do Mercado Livre.\n\n**Fluxo quando frete é pago:**\n1. Envia boas-vindas (Ana)\n2. Instrução sobre chapatex\n3. Instrução sobre cintas\n4. Solicita dados do cliente\n5. Solicita escolha do vidro\n\n**Dados coletados:**\n- Nome completo\n- Endereço completo\n- CEP\n- CPF\n- E-mail\n- WhatsApp\n\n**Vidros disponíveis:**\n- Incolor\n- Mini Boreal\n- Fumê"
+							},
+							"response": []
+						},
+						{
+							"name": "Webhook Orders/Shipments",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"_id\": \"abc123\",\n    \"resource\": \"/orders/123456789\",\n    \"user_id\": 987654321,\n    \"topic\": \"orders_v2\",\n    \"application_id\": 111222333,\n    \"attempts\": 1,\n    \"sent\": \"2024-01-15T10:30:00.000-04:00\",\n    \"received\": \"2024-01-15T10:30:00.000-04:00\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/mercadolivre/orders",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "mercadolivre", "orders"]
+								},
+								"description": "Processa atualizações de pedidos e envios do Mercado Livre.\n\n**Tópicos:**\n- `orders_v2`: Mudanças no pedido (pago, cancelado, etc)\n- `shipments`: Mudanças no envio (enviado, entregue, etc)\n\n**Notificações enviadas:**\n- Pagamento confirmado\n- Pedido enviado (com código de rastreio)\n- Pedido entregue"
+							},
+							"response": []
+						},
+						{
+							"name": "Health Check",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{BASE_URL}}/api/webhooks/mercadolivre",
+									"host": ["{{BASE_URL}}"],
+									"path": ["api", "webhooks", "mercadolivre"]
+								},
+								"description": "Health check do webhook do Mercado Livre."
+							},
+							"response": [
+								{
+									"name": "Status OK",
+									"originalRequest": {
+										"method": "GET",
+										"header": [],
+										"url": {
+											"raw": "{{BASE_URL}}/api/webhooks/mercadolivre",
+											"host": ["{{BASE_URL}}"],
+											"path": ["api", "webhooks", "mercadolivre"]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"body": "{\n    \"status\": \"ok\",\n    \"webhook\": \"mercadolivre\",\n    \"supported_topics\": [\"questions\", \"messages\", \"orders_v2\", \"shipments\"]\n}"
+								}
+							]
+						}
+					]
+				}
+			]
+		}
+	]
+}
