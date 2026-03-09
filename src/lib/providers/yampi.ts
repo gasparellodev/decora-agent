@@ -126,12 +126,16 @@ export async function findProductSku(params: {
   }
 
   const colorSearch = COLOR_MAP[color || 'branco'] || 'Branca'
-  const searchQuery = `${modelSearch} ${colorSearch}`
+  const isArremate = model === 'arremate'
+  const isPivotante = model === 'capelinha' || model === 'capelinha_3v'
+  // Não incluir cor na busca — Yampi retorna 0 resultados com cor no query
+  // Buscar só pelo modelo e filtrar por cor no nome do produto depois
+  const searchQuery = isArremate || isPivotante ? modelSearch : `Janela de ${modelSearch}`
 
   console.log('[Yampi] Buscando produto:', searchQuery)
 
   try {
-    const res = await fetch(apiUrl(`/catalog/products?include=skus&q=${encodeURIComponent(searchQuery)}&limit=5`), {
+    const res = await fetch(apiUrl(`/catalog/products?include=skus&q=${encodeURIComponent(searchQuery)}&limit=10`), {
       headers: getHeaders(),
     })
 
@@ -148,8 +152,28 @@ export async function findProductSku(params: {
       return null
     }
 
-    // Pegar primeiro produto ativo
-    const product = products.find(p => p.active) || products[0]
+    // Filtrar por cor no nome do produto (ex: "Branca", "Preta")
+    // Se tem grade no modelo, filtrar também por "Grade" no nome
+    const hasGrade = model.includes('grade')
+    const hasTela = model.includes('tela')
+    let product = products.find(p => {
+      const nameLower = p.name.toLowerCase()
+      const colorMatch = nameLower.includes(colorSearch.toLowerCase())
+      const gradeMatch = hasGrade ? nameLower.includes('grade') : !nameLower.includes('grade')
+      const telaMatch = hasTela ? nameLower.includes('tela') : !nameLower.includes('tela')
+      return p.active && colorMatch && gradeMatch && telaMatch
+    })
+
+    // Fallback: só cor
+    if (!product) {
+      product = products.find(p => p.active && p.name.toLowerCase().includes(colorSearch.toLowerCase()))
+    }
+
+    // Fallback: primeiro ativo
+    if (!product) {
+      product = products.find(p => p.active) || products[0]
+      console.log('[Yampi] Usando produto fallback (sem match de cor):', product.name)
+    }
     const skus = product.skus?.data || []
 
     if (skus.length === 0) {
