@@ -45,36 +45,39 @@ export async function POST(request: NextRequest) {
     }
 
     // Mapear status do Melhor Envio
+    const firstName = order.lead?.name?.split(' ')[0] || 'Cliente'
+    const orderNumber = order.order_number || ''
+
     const statusMap: Record<string, { status: string; production_status: string; message: string }> = {
       'posted': {
         status: 'enviado',
         production_status: 'enviado',
-        message: `📦 Seu pedido foi postado!\n\n🚚 *Código de Rastreio:* ${tracking}\n\nVocê pode acompanhar pelo site da transportadora.`
+        message: `Olá ${firstName} 👋\n\nSeu pedido${orderNumber ? ` #${orderNumber}` : ''} já está com a transportadora responsável pela entrega 🚚\n\n📦 Esse é o seu número de rastreio: *${tracking}*\n\nVocê pode acompanhar através do seguinte link: https://rptn.in/c/${tracking}`
       },
       'in_transit': {
         status: 'em_transito',
         production_status: 'enviado',
-        message: `🚚 Seu pedido está em trânsito!\n\nCódigo: ${tracking}\n\nEm breve chegará ao seu destino!`
+        message: `Olá, ${firstName}! 😊\n\nSeu pedido${orderNumber ? ` #${orderNumber}` : ''} está a caminho! 🚚✨\n\nAcompanhe onde ele está com seu código de rastreio:\n📍 *${tracking}*\n\nJá já chega! 📦🎉`
       },
       'out_for_delivery': {
         status: 'saiu_entrega',
         production_status: 'enviado',
-        message: `🎉 Seu pedido saiu para entrega!\n\nPrepare-se para receber suas janelas hoje!`
+        message: `Olá, ${firstName}! 🎉\n\nSeu pedido${orderNumber ? ` #${orderNumber}` : ''} saiu para entrega!\n\nPrepare-se para receber suas janelas hoje! 🪟✨`
       },
       'delivered': {
         status: 'entregue',
         production_status: 'entregue',
-        message: `✅ Seu pedido foi entregue!\n\nEsperamos que goste das suas novas janelas!\n\nSe precisar de ajuda com a instalação, é só me chamar. Temos manual completo e vídeos tutoriais! 📹`
+        message: `Olá, ${firstName}! 🎉\n\nSeu pedido${orderNumber ? ` #${orderNumber}` : ''} foi entregue! Esperamos que esteja amando sua compra. 📦❤️\n\nQualquer dúvida ou necessidade, estamos aqui. E se puder, deixa sua avaliação — ela ajuda muito a gente! ⭐😊`
       },
       'first_failed_delivery_attempt': {
         status: 'tentativa_falha',
         production_status: 'enviado',
-        message: `⚠️ Tentamos entregar seu pedido mas não conseguimos.\n\nA transportadora fará uma nova tentativa em breve. Por favor, verifique se alguém pode receber no endereço informado.`
+        message: `Olá, ${firstName}! ⚠️\n\nTentamos entregar seu pedido${orderNumber ? ` #${orderNumber}` : ''} mas não conseguimos.\n\nA transportadora fará uma nova tentativa em breve. Por favor, verifique se alguém pode receber no endereço informado.`
       },
       'returning': {
         status: 'devolvendo',
         production_status: 'enviado',
-        message: `📦 Seu pedido está retornando.\n\nPor favor, entre em contato conosco para verificar o endereço de entrega.`
+        message: `Olá, ${firstName}! 📦\n\nSeu pedido${orderNumber ? ` #${orderNumber}` : ''} está retornando.\n\nPor favor, entre em contato conosco para verificar o endereço de entrega.`
       }
     }
 

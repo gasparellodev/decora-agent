@@ -49,6 +49,9 @@ export async function POST(request: NextRequest) {
       case 'order.delivered':
         await handleOrderDelivered(resource)
         break
+      case 'order.status.updated':
+        await handleOrderStatusUpdated(resource)
+        break
       case 'transaction.payment.refused':
         await handlePaymentRefused(resource)
         break
@@ -277,13 +280,14 @@ async function handleOrderPaid(order: any) {
 
     if (orderData?.lead) {
       const evolution = getEvolutionProvider()
-      const message = `Ótima notícia! ✅
+      const firstName = orderData.lead.name?.split(' ')[0] || 'Cliente'
+      const orderNumber = order.number || orderData.order_number || ''
 
-O pagamento do seu pedido #${order.number} foi confirmado!
+      const message = `Olá, ${firstName}! 🎉
 
-Sua janela já entrou em produção. O prazo é de 5 a 7 dias úteis.
+Seu pedido #${orderNumber} foi confirmado e o pagamento recebido! Agora é com a gente — já estamos separando tudo com carinho para o envio. 📦✨
 
-Você receberá uma mensagem quando estiver pronta!`
+Em breve você receberá o código de rastreio. Fique de olho! 😊`
 
       await evolution.sendText(orderData.lead.phone, message)
     }
@@ -324,26 +328,31 @@ async function handleOrderShipped(order: any) {
       .eq('source', 'yampi')
 
     // Notificar cliente
-    if (trackingCode) {
-      const { data: orderData } = await getSupabase()
-        .from('dc_orders')
-        .select('*, lead:dc_leads(*)')
-        .eq('external_id', order.id?.toString())
-        .eq('source', 'yampi')
-        .single()
+    const { data: orderData } = await getSupabase()
+      .from('dc_orders')
+      .select('*, lead:dc_leads(*)')
+      .eq('external_id', order.id?.toString())
+      .eq('source', 'yampi')
+      .single()
 
-      if (orderData?.lead) {
-        const evolution = getEvolutionProvider()
-        const message = `Seu pedido foi enviado! 📦
+    if (orderData?.lead) {
+      const evolution = getEvolutionProvider()
+      const firstName = orderData.lead.name?.split(' ')[0] || 'Cliente'
+      const orderNumber = order.number || orderData.order_number || ''
 
-🚚 *Código de Rastreio:* ${trackingCode}
+      let message = `Olá ${firstName} 👋
 
-Acompanhe pelo site da transportadora.
+Seu pedido #${orderNumber} já está com a transportadora responsável pela entrega 🚚`
 
-Boas compras!`
+      if (trackingCode) {
+        message += `
 
-        await evolution.sendText(orderData.lead.phone, message)
+📦 Esse é o seu número de rastreio: *${trackingCode}*
+
+Você pode acompanhar através do seguinte link: https://rptn.in/c/${trackingCode}`
       }
+
+      await evolution.sendText(orderData.lead.phone, message)
     }
 
   } catch (error) {
@@ -395,23 +404,56 @@ async function handleOrderDelivered(order: any) {
         }
       ])
 
+      // Extrair nomes dos itens do metadata
+      const metadata = orderData.metadata as any
+      const items = metadata?.items || metadata?.skus?.data || []
+      const itemsFormatted = items.map((i: any) => i.title || i.item_sku || 'Janela').join(', ') || 'encomenda'
+
       // Notificar cliente
       const evolution = getEvolutionProvider()
-      const message = `Entrega confirmada! ✅
+      const firstName = orderData.lead.name?.split(' ')[0] || 'Cliente'
 
-Seu pedido #${orderData.order_number} foi entregue!
+      const message = `Olá, ${firstName}! 👋
 
-Esperamos que você goste das suas novas janelas! 🪟
+Sua ${itemsFormatted} chegou! 🎉 Esperamos que você esteja amando sua compra!
 
-Se precisar de ajuda com a instalação, é só me chamar que envio nosso manual e vídeos tutoriais.
+Foi um prazer ter você na Decora Esquadrias. Nosso time se dedicou para que tudo chegasse certinho — e agora queremos saber: o que achou? 😊
 
-Obrigado por escolher a Decora! 💙`
+Sua opinião faz toda a diferença pra gente! Deixa sua avaliação e nos conta como foi a experiência. ⭐`
 
       await evolution.sendText(orderData.lead.phone, message)
     }
 
   } catch (error) {
     console.error('Error handling Yampi order delivered:', error)
+  }
+}
+
+async function handleOrderStatusUpdated(order: any) {
+  const statusAlias = order.status?.data?.alias || order.status?.alias || ''
+  console.log(`[Yampi] Order status updated to: ${statusAlias} (order ${order.number || order.id})`)
+
+  switch (statusAlias) {
+    case 'paid':
+    case 'approved':
+      await handleOrderPaid(order)
+      break
+    case 'invoiced':
+      await handleOrderInvoiced(order)
+      break
+    case 'shipped':
+    case 'sent':
+      await handleOrderShipped(order)
+      break
+    case 'delivered':
+      await handleOrderDelivered(order)
+      break
+    case 'cancelled':
+    case 'refunded':
+      console.log(`[Yampi] Order ${order.number} status: ${statusAlias} (no action)`)
+      break
+    default:
+      console.log(`[Yampi] Unhandled order status: ${statusAlias}`)
   }
 }
 
