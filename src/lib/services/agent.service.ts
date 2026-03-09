@@ -120,6 +120,7 @@ async function processCRMOutput(
   // 1. Atualizar lead
   const leadUpdates: Record<string, unknown> = {}
   if (crmData.customer_name) leadUpdates.name = crmData.customer_name
+  if (crmData.customer_email) leadUpdates.email = crmData.customer_email
   if (crmData.cep) leadUpdates.cep = crmData.cep.replace(/\D/g, '')
 
   // Mapear stage

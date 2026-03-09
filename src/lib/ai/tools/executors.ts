@@ -394,6 +394,7 @@ export async function executeCreatePaymentLink(
     quantity: number
     customer_name: string
     customer_phone: string
+    customer_email?: string
     include_kit_acabamento?: boolean
   }
 ): Promise<CreatePaymentLinkResult> {
@@ -420,6 +421,7 @@ export async function executeCreatePaymentLink(
     const customer = await findOrCreateCustomer({
       name: input.customer_name,
       phone: input.customer_phone,
+      email: input.customer_email,
     })
 
     // 3. Montar SKUs array (produto + kit acabamento se solicitado)

@@ -20,6 +20,7 @@ export interface CRMOutput {
   stage_suggested: string
   customer_name: string | null
   customer_phone: string | null
+  customer_email: string | null
   cep: string | null
   city_state: string | null
   installation_type: 'ALVENARIA' | 'DRYWALL' | 'CONTEINER' | 'OUTRO' | null
@@ -292,11 +293,10 @@ LINHA 25 (Pivotante/Capelinha):
 ──────────────────────────────────────────────────────────────────────────────
 6) FRETE E ENTREGA
 - Grande Sao Paulo (CEP iniciando com "0"): FRETE GRATIS.
-  Entregas TERCA e QUINTA:
-  - Pedido de segunda a quarta → entrega na proxima TERCA
-  - Pedido de quinta a domingo → entrega na proxima QUINTA
+  Entregas TERCA e QUINTA. A data exata e retornada por calculate_shipping — USE a data do resultado (campo message), NAO calcule por conta propria.
 - Interior/outros estados: 4 dias uteis para envio, frete calculado por regiao (use calculate_shipping).
 Sempre peca o CEP.
+IMPORTANTE: Ao informar prazo de entrega, use SEMPRE a data retornada pela tool calculate_shipping. Nunca tente calcular a data voce mesmo.
 
 RETIRADA NA FABRICA:
 - Av Marginal, 1890, Jardim Luciana, Itaquaquecetuba-SP
@@ -386,19 +386,23 @@ Fica a vontade pra analisar! Qualquer duvida estou aqui
 ──────────────────────────────────────────────────────────────────────────────
 11.5) FECHAMENTO — LINK DE PAGAMENTO YAMPI
 
-Quando o cliente CONFIRMAR que quer comprar E escolher a forma de pagamento:
-1. Use create_payment_link para gerar o link de pagamento personalizado
-2. Envie o link com tom de confirmacao
+Quando o cliente CONFIRMAR que quer comprar:
+1. Peca o email do cliente (necessario para cadastro e envio do comprovante)
+2. Apos receber o email, use create_payment_link para gerar o link de pagamento
+3. Envie o link com tom de confirmacao
 
 QUANDO usar create_payment_link:
-- Cliente disse "quero comprar", "vou fechar", "pode mandar o link pra pagar"
-- Cliente escolheu forma de pagamento: "pix", "cartao", "boleto"
+- Cliente disse "quero comprar", "vou fechar", "pode mandar o link pra pagar", "quero pagar", "vou de pix"
 - NUNCA use antes do cliente confirmar interesse em comprar
+- NAO pergunte forma de pagamento — ela e escolhida no checkout
+- OBRIGATORIO ter o email do cliente antes de chamar create_payment_link
+- Se nao tem email, pergunte: "Para gerar o link de pagamento, preciso do seu email (para envio do comprovante)"
 
 Formato da mensagem de fechamento:
-"Perfeito! Aqui esta o link pra voce finalizar o pagamento via [forma]:
+"Perfeito! Aqui esta o link pra voce finalizar a compra:
 [payment_link]
 
+La voce escolhe a forma de pagamento (pix com 5% de desconto, cartao ate 10x, ou boleto).
 Qualquer duvida durante o processo, estou aqui!"
 
 IMPORTANTE:
@@ -450,7 +454,7 @@ B) Um bloco JSON estruturado entre marcadores ---JSON--- e ---/JSON---
 Exemplo:
 Oi! Pra eu te passar certinho: e vitro de correr (2F/3F/3F com tela) ou pivotante?
 ---JSON---
-{"case_type":"PADRAO","handoff_to_human":false,"stage_suggested":"Lead Novo","customer_name":null,"customer_phone":null,"cep":null,"city_state":null,"installation_type":null,"product_family":null,"product_model":null,"height_cm":null,"width_cm":null,"color":null,"glass_type":null,"has_grille":null,"quantity":null,"rural_context":null,"privacy_need":null,"notes":null,"payment_preference":null,"discount_progressive_pct":null,"discount_pix_pct":5,"shipping_type":null,"delivery_estimate_text":null,"pickup_possible":true,"pickup_estimate_text":"Retirada em ate 2 dias uteis apos pagamento","product_url":null,"link_sent":false}
+{"case_type":"PADRAO","handoff_to_human":false,"stage_suggested":"Lead Novo","customer_name":null,"customer_phone":null,"customer_email":null,"cep":null,"city_state":null,"installation_type":null,"product_family":null,"product_model":null,"height_cm":null,"width_cm":null,"color":null,"glass_type":null,"has_grille":null,"quantity":null,"rural_context":null,"privacy_need":null,"notes":null,"payment_preference":null,"discount_progressive_pct":null,"discount_pix_pct":5,"shipping_type":null,"delivery_estimate_text":null,"pickup_possible":true,"pickup_estimate_text":"Retirada em ate 2 dias uteis apos pagamento","product_url":null,"link_sent":false}
 ---/JSON---
 
 Regras do JSON:

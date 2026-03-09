@@ -130,7 +130,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'create_payment_link',
-      description: 'Cria um link de pagamento personalizado na Yampi para o cliente finalizar a compra. Use APENAS quando o cliente CONFIRMAR que quer comprar E escolher a forma de pagamento (pix/cartão/boleto). NÃO use antes da confirmação de compra.',
+      description: 'Cria um link de pagamento personalizado na Yampi para o cliente finalizar a compra. Use APENAS quando o cliente CONFIRMAR que quer comprar. NÃO pergunte forma de pagamento — é escolhida no checkout. NÃO use antes da confirmação de compra.',
       parameters: {
         type: 'object',
         properties: {
@@ -173,12 +173,16 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
             type: 'string',
             description: 'Telefone do cliente (WhatsApp)'
           },
+          customer_email: {
+            type: 'string',
+            description: 'Email do cliente (para cadastro e envio do comprovante)'
+          },
           include_kit_acabamento: {
             type: 'boolean',
             description: 'Se inclui Kit Acabamento R$117'
           }
         },
-        required: ['product_name', 'model', 'quantity', 'customer_name', 'customer_phone']
+        required: ['product_name', 'model', 'quantity', 'customer_name', 'customer_phone', 'customer_email']
       }
     }
   }
