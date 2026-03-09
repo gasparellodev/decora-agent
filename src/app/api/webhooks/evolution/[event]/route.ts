@@ -126,23 +126,6 @@ async function handleMessageUpsert(payload: any) {
     const pushName = data.pushName || null
     const messageId = data.key?.id || ''
 
-    // ===== FILTRO DE WHITELIST (MODO TESTE) =====
-    const whitelist = process.env.WHATSAPP_WHITELIST?.split(',').map(n => n.trim()).filter(Boolean)
-    if (whitelist && whitelist.length > 0) {
-      // Normalizar numero (remover caracteres nao numericos)
-      const normalizedPhone = phone.replace(/\D/g, '')
-      const isWhitelisted = whitelist.some(allowed => 
-        normalizedPhone.endsWith(allowed) || allowed.endsWith(normalizedPhone)
-      )
-      
-      if (!isWhitelisted) {
-        console.log(`[WHITELIST] Numero ${phone} bloqueado - nao esta na whitelist`)
-        return NextResponse.json({ ok: true, skipped: 'not_whitelisted' })
-      }
-      console.log(`[WHITELIST] Numero ${phone} autorizado`)
-    }
-    // ===== FIM FILTRO DE WHITELIST =====
-    
     // Extrair conteúdo da mensagem
     let content = ''
     let mediaType: MediaType | null = null
@@ -227,6 +210,17 @@ async function handleMessageUpsert(payload: any) {
     if (!lead) {
       console.error('Failed to upsert lead')
       return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 })
+    }
+
+    // Ignorar leads pre-existentes (criados antes da ativacao do agente)
+    const cutoffDate = process.env.AGENT_CUTOFF_DATE
+    if (cutoffDate && lead.created_at) {
+      const cutoff = new Date(cutoffDate)
+      const leadCreated = new Date(lead.created_at)
+      if (leadCreated < cutoff) {
+        console.log(`[CUTOFF] Lead ${phone} criado em ${lead.created_at} (antes do cutoff ${cutoffDate}) - ignorando`)
+        return NextResponse.json({ ok: true, skipped: 'pre_existing_lead' })
+      }
     }
 
     // Get or create conversation

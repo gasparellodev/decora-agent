@@ -203,6 +203,17 @@ async function handleMessageUpsert(payload: any) {
       return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 })
     }
 
+    // Ignorar leads pre-existentes (criados antes da ativacao do agente)
+    const cutoffDate = process.env.AGENT_CUTOFF_DATE
+    if (cutoffDate && lead.created_at) {
+      const cutoff = new Date(cutoffDate)
+      const leadCreated = new Date(lead.created_at)
+      if (leadCreated < cutoff) {
+        console.log(`[CUTOFF] Lead ${phone} criado em ${lead.created_at} (antes do cutoff ${cutoffDate}) - ignorando`)
+        return NextResponse.json({ ok: true, skipped: 'pre_existing_lead' })
+      }
+    }
+
     // Get or create conversation
     const conversation = await getOrCreateConversation(lead.id)
     if (!conversation) {
