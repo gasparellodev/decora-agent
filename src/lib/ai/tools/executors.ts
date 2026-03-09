@@ -168,23 +168,31 @@ export async function executeCalculateShipping(
     // Grátis para WhatsApp e Shopify, R$55 apenas Mercado Livre
     const finalCost = source === 'mercadolivre' ? freight.value : 0
 
-    // Entregas SP: terça e quinta
-    // Pedido seg-qua → próxima terça | Pedido qui-dom → próxima quinta
+    // Sistema de lotes SP (CEP inicio 0):
+    // Seg-Qua → lote fecha quarta → entrega terca seguinte
+    // Qui-Dom → lote fecha domingo → entrega quinta seguinte
     const today = new Date()
     const dayOfWeek = today.getDay() // 0=dom, 1=seg, 2=ter, 3=qua, 4=qui, 5=sex, 6=sab
     const nextDelivery = new Date(today)
 
     if (dayOfWeek >= 1 && dayOfWeek <= 3) {
-      // Seg, Ter, Qua → próxima Terça
-      const daysUntilTuesday = (2 - dayOfWeek + 7) % 7 || 7
-      nextDelivery.setDate(today.getDate() + daysUntilTuesday)
+      // Seg(1), Ter(2), Qua(3) → terca seguinte
+      const daysUntilWed = 3 - dayOfWeek
+      nextDelivery.setDate(today.getDate() + daysUntilWed + 6) // qua + 6 dias = terca
     } else {
-      // Qui, Sex, Sab, Dom → próxima Quinta
-      const daysUntilThursday = (4 - dayOfWeek + 7) % 7 || 7
-      nextDelivery.setDate(today.getDate() + daysUntilThursday)
+      // Qui(4), Sex(5), Sab(6), Dom(0) → quinta seguinte
+      const daysUntilSun = dayOfWeek === 0 ? 0 : 7 - dayOfWeek
+      nextDelivery.setDate(today.getDate() + daysUntilSun + 4) // dom + 4 dias = quinta
     }
 
-    console.log('[ExecuteCalculateShipping] SP - Valor final:', finalCost, '| Próxima entrega:', nextDelivery.toISOString().split('T')[0])
+    // Formatar data DD/MM + dia da semana
+    const dia = nextDelivery.getDate().toString().padStart(2, '0')
+    const mes = (nextDelivery.getMonth() + 1).toString().padStart(2, '0')
+    const diasSemana = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado']
+    const diaSemana = diasSemana[nextDelivery.getDay()]
+    const dataFormatada = `${dia}/${mes}`
+
+    console.log('[ExecuteCalculateShipping] SP - Valor final:', finalCost, '| Próxima entrega:', diaSemana, dataFormatada)
 
     return {
       cep,
@@ -192,10 +200,10 @@ export async function executeCalculateShipping(
       delivery_type: 'sp_delivery',
       estimated_days: freight.estimatedDays,
       shipping_cost: finalCost,
-      next_delivery_date: nextDelivery.toISOString(),
+      next_delivery_date: dataFormatada,
       carrier: freight.carrier,
       is_free: finalCost === 0,
-      message: ''
+      message: `Frete gratis para Grande SP. Entrega na proxima ${diaSemana}-feira, ${dataFormatada}.`
     }
   }
 
@@ -435,6 +443,15 @@ export async function executeCreatePaymentLink(
     })
 
     if (!result.success) {
+      // Fallback: usar purchase_url do SKU (link direto pro checkout)
+      if (sku.purchaseUrl) {
+        console.log('[CreatePaymentLink] Payment link falhou, usando purchase_url do SKU como fallback')
+        return {
+          success: true,
+          payment_url: sku.purchaseUrl,
+          message: 'Link de compra gerado.',
+        }
+      }
       return {
         success: false,
         message: result.error || 'Erro ao criar link de pagamento.',

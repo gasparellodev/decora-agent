@@ -246,16 +246,17 @@ export async function findOrCreateCustomer(params: {
     }
 
     // Criar novo cliente
-    const customerEmail = email || `${phone}@whatsapp.decora.internal`
+    const cleanPhone = phone.replace(/\D/g, '')
+    const customerEmail = email || `${cleanPhone}@cliente.decoraesquadrias.com.br`
+    const fullName = name.includes(' ') ? name : `${name} (WhatsApp)`
     const createRes = await fetch(apiUrl('/customers'), {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
         active: true,
         type: 'f',
-        name: name,
+        name: fullName,
         email: customerEmail,
-        cpf: '00000000000', // placeholder - será atualizado quando disponível
         homephone: phone,
       }),
     })
