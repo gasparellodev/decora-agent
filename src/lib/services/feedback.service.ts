@@ -9,6 +9,7 @@ import OpenAI from 'openai'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getEvolutionProvider } from '@/lib/providers/evolution'
 import { formatForWhatsApp, calculateTypingTime, sleep } from '@/lib/utils/whatsapp-formatter'
+import { upsertKnowledgeEmbedding, incrementKnowledgeScore } from './embedding.service'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!
@@ -93,6 +94,7 @@ export async function processFeedbackResponse(
     const analysis = await analyzeAndCorrect(feedback.original_content, feedbackText)
 
     // 4. Atualizar feedback com análise
+    const autoApply = analysis.confidence > 0.8
     await getSupabase()
       .from('dc_message_feedback')
       .update({
@@ -101,10 +103,32 @@ export async function processFeedbackResponse(
         ai_analysis: analysis,
         suggested_prompt_changes: analysis.suggestedPromptChanges,
         suggested_kb_updates: analysis.suggestedKBUpdates,
-        status: analysis.confidence > 0.7 ? 'applied' : 'in_review',
-        resolved_at: analysis.confidence > 0.7 ? new Date().toISOString() : null
+        status: autoApply ? 'applied' : (analysis.confidence > 0.5 ? 'in_review' : 'pending'),
+        resolved_at: autoApply ? new Date().toISOString() : null
       })
       .eq('id', feedback.id)
+
+    // 4b. Auto-aplicar correções de alta confiança na KB vetorial
+    if (autoApply && analysis.suggestedKBUpdates) {
+      try {
+        await upsertKnowledgeEmbedding({
+          source: 'feedback_correction',
+          sourceId: feedback.id,
+          title: `Correção: ${analysis.errorType} - ${analysis.errorDescription.substring(0, 80)}`,
+          content: `Erro identificado: ${analysis.errorDescription}\nCorreção aplicada: ${analysis.correctedMessage}\n${analysis.suggestedKBUpdates}`,
+          metadata: {
+            feedbackId: feedback.id,
+            errorType: analysis.errorType,
+            confidence: analysis.confidence,
+            originalMessage: feedback.original_content?.substring(0, 200)
+          },
+          status: 'auto_applied'
+        })
+        console.log(`[Feedback] Auto-applied correction to KB for feedback ${feedback.id}`)
+      } catch (kbError) {
+        console.error('[Feedback] Error auto-applying to KB:', kbError)
+      }
+    }
 
     // 5. Buscar lead para enviar resposta corrigida
     const { data: lead } = await getSupabase()
@@ -254,6 +278,31 @@ ${feedbackText}`
       suggestedKBUpdates: null,
       confidence: 0
     }
+  }
+}
+
+/**
+ * Processa feedback positivo -- reforça o conhecimento usado
+ */
+export async function processPositiveFeedback(messageId: string): Promise<void> {
+  try {
+    const { data: message } = await getSupabase()
+      .from('dc_messages')
+      .select('content, metadata')
+      .eq('id', messageId)
+      .single()
+
+    if (!message) return
+
+    const ragArticlesUsed = (message.metadata as Record<string, unknown>)?.rag_articles_used as string[] | undefined
+    if (ragArticlesUsed && ragArticlesUsed.length > 0) {
+      for (const articleId of ragArticlesUsed) {
+        await incrementKnowledgeScore(articleId, 0.1)
+      }
+      console.log(`[Feedback] Reinforced ${ragArticlesUsed.length} KB articles from positive feedback`)
+    }
+  } catch (error) {
+    console.error('[Feedback] Error processing positive feedback:', error)
   }
 }
 

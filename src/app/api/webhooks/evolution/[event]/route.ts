@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getOrCreateConversation, upsertLead } from '@/lib/services/agent.service'
-import { bufferMessage } from '@/lib/services/message-buffer.service'
+import { bufferMessage, onTypingStarted, onTypingStopped } from '@/lib/services/message-buffer.service'
 import { processMedia, MediaType } from '@/lib/services/media-processor.service'
 import { getEvolutionProvider } from '@/lib/providers/evolution'
+import { findDecorProductLink } from '@/lib/utils/link-detector'
+import type { IncomingProductContext } from '@/types/agent'
 
 /**
  * Rota dinâmica para webhooks da Evolution API quando "Webhook by Events" está ativado
@@ -31,6 +33,10 @@ const eventNameMap: Record<string, string> = {
   'messages.upsert': 'MESSAGES_UPSERT',
   'connection.update': 'CONNECTION_UPDATE',
   'qrcode.updated': 'QRCODE_UPDATED',
+  // Presence
+  'presence-update': 'PRESENCE_UPDATE',
+  'presence_update': 'PRESENCE_UPDATE',
+  'presence.update': 'PRESENCE_UPDATE',
 }
 
 // Função para normalizar o nome do evento
@@ -76,6 +82,9 @@ export async function POST(
       
       case 'QRCODE_UPDATED':
         return handleQRCodeUpdate(normalizedPayload)
+
+      case 'PRESENCE_UPDATE':
+        return handlePresenceUpdate(normalizedPayload)
       
       default:
         console.log('Unhandled event type:', event, '(original:', payload.event, ')')
@@ -252,11 +261,28 @@ async function handleMessageUpsert(payload: any) {
       // Ignore metrics error
     }
 
+    // Detectar link de produto da Decora na mensagem
+    let productContext: IncomingProductContext | undefined
+    const decorProduct = findDecorProductLink(content)
+    if (decorProduct) {
+      console.log(`[DECORA LINK] Produto detectado: ${decorProduct.productName || decorProduct.handle}`, decorProduct)
+      productContext = {
+        handle: decorProduct.handle,
+        productName: decorProduct.productName,
+        color: decorProduct.color,
+        dimensions: decorProduct.width && decorProduct.height
+          ? { width: decorProduct.width, height: decorProduct.height }
+          : undefined,
+        glassType: decorProduct.glassType,
+        orientation: decorProduct.orientation,
+        sourceUrl: decorProduct.sourceUrl
+      }
+    }
+
     // Adicionar ao buffer de mensagens (não bloqueia o webhook)
-    // O buffer aguarda 3s para agrupar mensagens consecutivas antes de processar
     setImmediate(() => {
       try {
-        bufferMessage(lead, conversation, content, mediaType || undefined)
+        bufferMessage(lead, conversation, content, mediaType || undefined, productContext)
       } catch (error) {
         console.error('Error buffering message:', error)
       }
@@ -267,6 +293,45 @@ async function handleMessageUpsert(payload: any) {
   } catch (error) {
     console.error('Error handling message upsert:', error)
     return NextResponse.json({ error: 'Failed to process message' }, { status: 500 })
+  }
+}
+
+async function handlePresenceUpdate(payload: any) {
+  try {
+    const data = payload.data
+    const remoteJid = data?.remoteJid || data?.participant
+    const status = data?.status || data?.presence
+
+    if (!remoteJid || !status) {
+      return NextResponse.json({ ok: true, skipped: 'no_presence_data' })
+    }
+
+    const phone = remoteJid.replace('@s.whatsapp.net', '').replace(/\D/g, '')
+    if (!phone) {
+      return NextResponse.json({ ok: true, skipped: 'no_phone' })
+    }
+
+    // Buscar lead pelo telefone para obter o leadId
+    const { data: lead } = await getSupabase()
+      .from('dc_leads')
+      .select('id')
+      .eq('phone', phone)
+      .single()
+
+    if (!lead) {
+      return NextResponse.json({ ok: true, skipped: 'lead_not_found' })
+    }
+
+    if (status === 'composing') {
+      onTypingStarted(lead.id)
+    } else {
+      onTypingStopped(lead.id)
+    }
+
+    return NextResponse.json({ ok: true, presence: status, lead_id: lead.id })
+  } catch (error) {
+    console.error('Error handling presence update:', error)
+    return NextResponse.json({ ok: true, skipped: 'presence_error' })
   }
 }
 

@@ -1,19 +1,18 @@
 import OpenAI from 'openai'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getEvolutionProvider } from '@/lib/providers/evolution'
-import { salesAgentPrompt, LeadHistory, postSalePrompt, PostSaleMessageType, PostSaleContext } from '@/lib/ai/prompts/sales-agent'
+import { salesAgentPrompt, LeadHistory, postSalePrompt, PostSaleMessageType, PostSaleContext, CRMOutput } from '@/lib/ai/prompts/sales-agent'
+import { searchSimilarKnowledge, formatRAGContext, shouldSkipRAG } from '@/lib/services/embedding.service'
 import { agentTools } from '@/lib/ai/tools'
 import {
   executeCheckOrderStatus,
   executeEscalateToHuman,
-  executeScheduleFollowUp,
   executeCalculateShipping,
   executeGetProductInfo,
-  executeUpdateLeadInfo,
-  executeValidateMeasurement,
-  executeRecommendProduct
+  executeCreatePaymentLink,
 } from '@/lib/ai/tools/executors'
-import { formatForWhatsApp, calculateTypingTime, sleep, splitLongMessage, getDelayBetweenMessages } from '@/lib/utils/whatsapp-formatter'
+import { createProductionOrder } from '@/lib/services/production-order.service'
+import { formatForWhatsApp, calculateTypingTime, sleep, splitLongMessage, getDelayBetweenMessages, truncateMessage } from '@/lib/utils/whatsapp-formatter'
 import { formatForML } from '@/lib/utils/ml-formatter'
 import type { Lead, Conversation, Order } from '@/types/database'
 import type { AgentContext, ProcessMessageResult as AgentProcessResult } from '@/types/agent'
@@ -65,9 +64,158 @@ async function getLeadHistory(leadId: string): Promise<LeadHistory> {
   }
 }
 
+// =====================================================
+// PARSER DE RESPOSTA JSON
+// =====================================================
+
+/**
+ * Separa a mensagem do cliente do JSON de CRM na resposta do GPT.
+ * O GPT retorna: texto para WhatsApp + bloco ---JSON--- ... ---/JSON---
+ */
+function parseAgentResponse(rawResponse: string): { message: string; crmData: CRMOutput | null } {
+  const jsonMatch = rawResponse.match(/---JSON---([\s\S]*?)---\/JSON---/)
+
+  if (!jsonMatch) {
+    return { message: rawResponse.trim(), crmData: null }
+  }
+
+  // Extrair texto (antes do JSON) e JSON
+  const message = rawResponse.replace(/---JSON---[\s\S]*?---\/JSON---/, '').trim()
+  const jsonStr = jsonMatch[1].trim()
+
+  try {
+    const crmData = JSON.parse(jsonStr) as CRMOutput
+    return { message, crmData }
+  } catch (err) {
+    console.warn('[CRM Parser] Invalid JSON in response:', err)
+    return { message: rawResponse.replace(/---JSON---[\s\S]*?---\/JSON---/, '').trim(), crmData: null }
+  }
+}
+
+// =====================================================
+// CRM AUTO-UPDATE
+// =====================================================
+
+/** Mapeamento de stage_suggested do JSON para dc_leads.stage */
+const STAGE_MAP: Record<string, string> = {
+  'Lead Novo': 'novo',
+  'Qualificado': 'qualificando',
+  'Orcamento/Resumo Gerado': 'orcamento',
+  'Link Enviado': 'orcamento',
+  'Aguardando Pagamento': 'orcamento',
+  'Pedido Comprado': 'comprou',
+  'Nao Interessado': 'inativo',
+}
+
+/**
+ * Atualiza lead e conversa automaticamente a partir do JSON retornado pelo GPT.
+ */
+async function processCRMOutput(
+  crmData: CRMOutput,
+  lead: Lead,
+  conversation: Conversation
+): Promise<void> {
+  const supabase = getSupabase()
+
+  // 1. Atualizar lead
+  const leadUpdates: Record<string, unknown> = {}
+  if (crmData.customer_name) leadUpdates.name = crmData.customer_name
+  if (crmData.cep) leadUpdates.cep = crmData.cep.replace(/\D/g, '')
+
+  // Mapear stage
+  const mappedStage = STAGE_MAP[crmData.stage_suggested]
+  if (mappedStage && mappedStage !== lead.stage) {
+    leadUpdates.stage = mappedStage
+  }
+
+  if (Object.keys(leadUpdates).length > 0) {
+    try {
+      await supabase.from('dc_leads').update(leadUpdates).eq('id', lead.id)
+      console.log(`[CRM] Lead updated:`, leadUpdates)
+    } catch (err) {
+      console.warn('[CRM] Error updating lead:', err)
+    }
+  }
+
+  // 2. Atualizar conversa com stage e fatos coletados (MERGE, não substituição)
+  try {
+    // Carregar fatos existentes para merge
+    const { data: currentConv } = await supabase
+      .from('dc_conversations')
+      .select('collected_facts')
+      .eq('id', conversation.id)
+      .single()
+
+    const existingFacts = (currentConv?.collected_facts || {}) as Record<string, unknown>
+    const mergedFacts: Record<string, unknown> = { ...existingFacts }
+
+    // Campos que resetam dependentes quando mudam de valor
+    const DEPENDENT_RESETS: Record<string, string[]> = {
+      product_model: ['product_url', 'link_sent', 'height_cm', 'width_cm'],
+      height_cm: ['product_url', 'link_sent'],
+      width_cm: ['product_url', 'link_sent'],
+      color: ['product_url', 'link_sent'],
+    }
+
+    for (const [key, value] of Object.entries(crmData as unknown as Record<string, unknown>)) {
+      if (value !== null && value !== undefined) {
+        // Se valor mudou, resetar dependentes
+        if (DEPENDENT_RESETS[key] && existingFacts[key] !== undefined && existingFacts[key] !== value) {
+          for (const dep of DEPENDENT_RESETS[key]) {
+            mergedFacts[dep] = null
+          }
+        }
+        mergedFacts[key] = value
+      }
+    }
+
+    await supabase
+      .from('dc_conversations')
+      .update({
+        conversation_state: crmData.stage_suggested,
+        collected_facts: mergedFacts
+      })
+      .eq('id', conversation.id)
+
+    console.log('[CRM] Facts merged successfully')
+  } catch (err) {
+    console.warn('[CRM] Error updating conversation:', err)
+  }
+
+  // 3. Se handoff_to_human = true, escalar automaticamente
+  if (crmData.handoff_to_human) {
+    try {
+      await executeEscalateToHuman(
+        {
+          reason: crmData.notes || `${crmData.case_type} - ${crmData.stage_suggested}`,
+          priority: 'medium',
+          summary: `Produto: ${crmData.product_model || 'N/A'} | Medida: ${crmData.width_cm || '?'}x${crmData.height_cm || '?'}cm | Cor: ${crmData.color || '?'} | Tipo: ${crmData.case_type}`
+        },
+        conversation.id,
+        lead.id
+      )
+      console.log('[CRM] Auto-escalated to human:', crmData.case_type, crmData.stage_suggested)
+    } catch (err) {
+      console.warn('[CRM] Error auto-escalating:', err)
+    }
+  }
+
+  // 4. Se link foi enviado, criar pedido no sistema de producao
+  if (crmData.link_sent && crmData.product_url) {
+    try {
+      await createProductionOrder(crmData, lead, conversation)
+    } catch (err) {
+      console.warn('[CRM] Error creating production order:', err)
+    }
+  }
+}
+
 /**
  * Processa mensagem do agente unificado
  * Suporta WhatsApp e Mercado Livre com comportamento adaptado por canal
+ *
+ * WhatsApp: usa master prompt com JSON output estruturado para CRM
+ * Mercado Livre: mantém comportamento existente (prompt-driven)
  */
 export async function processMessage(
   messageContent: string,
@@ -78,7 +226,7 @@ export async function processMessage(
   const startTime = Date.now()
   const isML = context.channel === 'mercadolivre'
   const toolsUsed: string[] = []
-  
+
   try {
     // Verificar se o agente está ativo (apenas para WhatsApp)
     if (!isML) {
@@ -100,34 +248,117 @@ export async function processMessage(
       }
     }
 
-    // Buscar histórico (apenas para WhatsApp com conversa)
-    let history: { direction: string; content: string }[] = []
-    let orders: Order[] = []
-    let leadHistory: LeadHistory | undefined
+    // ===== CARREGAR DADOS DA CONVERSA =====
+    let persistedFacts: string | undefined
+    let conversationSummary: string | undefined
 
-    if (!isML && conversation && lead) {
-      const { data: historyData } = await getSupabase()
-        .from('dc_messages')
-        .select('direction, sender_type, content, sent_at')
-        .eq('conversation_id', conversation.id)
-        .order('sent_at', { ascending: true })
-        .limit(20)
-      
-      history = historyData || []
+    if (!isML && conversation) {
+      const { data: convState } = await getSupabase()
+        .from('dc_conversations')
+        .select('conversation_state, collected_facts, summary')
+        .eq('id', conversation.id)
+        .single()
 
-      const { data: ordersData } = await getSupabase()
-        .from('dc_orders')
-        .select('*')
-        .eq('lead_id', lead.id)
-        .order('created_at', { ascending: false })
-        .limit(5)
-      
-      orders = (ordersData || []) as Order[]
-      leadHistory = await getLeadHistory(lead.id)
+      if (convState) {
+        const conversationState = convState.conversation_state as string | null
+
+        // Se conversa foi escalada, não processar IA
+        if (conversationState === 'Encaminhado para Humano') {
+          console.log('[Agent] Conversation escalated, skipping AI processing')
+          return { success: false, error: 'Conversation escalated' }
+        }
+
+        // Reset conversa inativa (>1h sem mensagem para testes, restaurar para 24 em producao)
+        const STALE_HOURS = 1
+        const lastMessageAt = lead?.last_message_at
+        if (lastMessageAt) {
+          const hoursSinceLastMessage = (Date.now() - new Date(lastMessageAt).getTime()) / (1000 * 60 * 60)
+          if (hoursSinceLastMessage > STALE_HOURS) {
+            console.log(`[Agent] Conversation stale (${Math.round(hoursSinceLastMessage)}h inactive). Generating summary.`)
+
+            // Gerar resumo da conversa anterior antes de limpar
+            if (convState.collected_facts) {
+              const facts = convState.collected_facts as Record<string, unknown>
+              const parts: string[] = []
+              if (facts.product_model) parts.push(`Modelo: ${facts.product_model}`)
+              if (facts.height_cm && facts.width_cm) parts.push(`Medidas: ${facts.width_cm}x${facts.height_cm}cm`)
+              if (facts.color) parts.push(`Cor: ${facts.color}`)
+              if (facts.glass_type) parts.push(`Vidro: ${facts.glass_type}`)
+              if (facts.quantity) parts.push(`Qtd: ${facts.quantity}`)
+              if (facts.cep) parts.push(`CEP: ${facts.cep}`)
+              if (facts.stage_suggested) parts.push(`Estagio: ${facts.stage_suggested}`)
+
+              if (parts.length > 0) {
+                const summary = `Conversa anterior (${new Date(lastMessageAt).toLocaleDateString('pt-BR')}): ${parts.join(', ')}`
+                await getSupabase()
+                  .from('dc_conversations')
+                  .update({ summary, collected_facts: null, conversation_state: null })
+                  .eq('id', conversation.id)
+                conversationSummary = summary
+                console.log(`[Agent] Summary saved: ${summary}`)
+              }
+            } else if (convState.summary) {
+              // Ja tem resumo de uma sessao anterior
+              conversationSummary = convState.summary as string
+            }
+
+            persistedFacts = undefined
+          } else {
+            // Passar fatos coletados como JSON string para o prompt
+            persistedFacts = convState.collected_facts
+              ? JSON.stringify(convState.collected_facts)
+              : undefined
+          }
+        } else {
+          persistedFacts = convState.collected_facts
+            ? JSON.stringify(convState.collected_facts)
+            : undefined
+        }
+      }
     }
 
+    // Paralelizar todas as queries independentes
+    const needsRAG = !shouldSkipRAG(messageContent)
+    const needsWhatsAppData = !isML && conversation && lead
+
+    const [historyResult, ordersResult, leadHistoryResult, ragResult] = await Promise.all([
+      needsWhatsAppData
+        ? getSupabase()
+            .from('dc_messages')
+            .select('direction, sender_type, content, sent_at')
+            .eq('conversation_id', conversation!.id)
+            .order('sent_at', { ascending: true })
+            .limit(20)
+        : Promise.resolve({ data: null }),
+
+      needsWhatsAppData
+        ? getSupabase()
+            .from('dc_orders')
+            .select('*')
+            .eq('lead_id', lead!.id)
+            .order('created_at', { ascending: false })
+            .limit(5)
+        : Promise.resolve({ data: null }),
+
+      needsWhatsAppData
+        ? getLeadHistory(lead!.id)
+        : Promise.resolve(undefined),
+
+      needsRAG
+        ? searchSimilarKnowledge(messageContent, 3, 0.7).catch(err => {
+            console.warn('[RAG] Error fetching context (non-critical):', err)
+            return [] as Awaited<ReturnType<typeof searchSimilarKnowledge>>
+          })
+        : Promise.resolve([] as Awaited<ReturnType<typeof searchSimilarKnowledge>>)
+    ])
+
+    const history = historyResult.data || []
+    const orders = (ordersResult.data || []) as Order[]
+    const leadHistory = leadHistoryResult as LeadHistory | undefined
+    const ragContext = formatRAGContext(ragResult)
+
     // Montar mensagens para a IA
-    const messages: OpenAI.ChatCompletionMessageParam[] = history.map(msg => ({
+    const messages: OpenAI.ChatCompletionMessageParam[] = history.map((msg: { direction: string; content: string }) => ({
       role: msg.direction === 'inbound' ? 'user' : 'assistant',
       content: msg.content
     }))
@@ -141,19 +372,32 @@ export async function processMessage(
       })
     }
 
-    // Gerar prompt com contexto do canal
-    const systemPrompt = salesAgentPrompt(lead || null, orders, leadHistory, context)
+    // ===== CONSTRUIR PROMPT =====
+    const systemPrompt = salesAgentPrompt(
+      lead || null,
+      orders,
+      leadHistory,
+      context,
+      ragContext || undefined,
+      persistedFacts || undefined,
+      conversationSummary
+    )
 
-    // Chamar GPT-4o com tools
+    // Todas as 4 tools sempre disponíveis (sem filtragem por estado)
+    const activeTools = agentTools
+
+    console.log(`[Agent ${context.channel}] Processing message (${messageContent.length} chars) | Tools: [${activeTools.map(t => t.function.name).join(', ')}]`)
+
+    // Chamar GPT-4o com todas as tools
     let response = await openai.chat.completions.create({
       model: 'gpt-4o',
-      max_tokens: isML ? 200 : 500, // ML precisa de respostas mais curtas
+      max_tokens: isML ? 200 : 1000,
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages
       ],
-      tools: agentTools,
-      tool_choice: 'auto'
+      tools: activeTools.length > 0 ? activeTools : undefined,
+      tool_choice: activeTools.length > 0 ? 'auto' : undefined
     })
 
     let totalTokens = response.usage?.total_tokens ?? 0
@@ -206,57 +450,24 @@ export async function processMessage(
             ) : { success: false, message: 'Não disponível no Mercado Livre' }
             break
 
-          case 'schedule_followup':
-            result = lead ? await executeScheduleFollowUp(
-              toolInput as { type: string; days_from_now: number; message?: string },
-              lead.id
-            ) : { success: false, message: 'Lead não disponível' }
-            break
-
-          case 'calculate_shipping':
-            // Adicionar source ao input para regras de frete
+          case 'calculate_shipping': {
             const shippingInput = {
               ...(toolInput as { cep: string; width?: number; height?: number; quantity?: number }),
               source: context.channel as 'whatsapp' | 'mercadolivre' | 'shopify'
             }
             result = await executeCalculateShipping(shippingInput)
             break
+          }
 
           case 'get_product_info':
             result = await executeGetProductInfo(
-              toolInput as { model: string; width?: number; height?: number; glass_type?: string; color?: string }
+              toolInput as { model: string; width?: number; height?: number; glass_type?: string; color?: string; orientation?: 'horizontal' | 'vertical'; quantity?: number; channel?: 'whatsapp' | 'mercadolivre' | 'shopify' }
             )
             break
 
-          case 'update_lead_info':
-            result = lead ? await executeUpdateLeadInfo(
-              toolInput as { name?: string; email?: string; cep?: string; cpf?: string; notes?: string },
-              lead.id
-            ) : { success: false, message: 'Lead não disponível' }
-            break
-
-          case 'validate_measurement':
-            result = await executeValidateMeasurement(
-              toolInput as { 
-                width: number; 
-                height: number; 
-                cep?: string; 
-                wall_type?: string; 
-                wall_depth?: number; 
-                model?: string 
-              }
-            )
-            break
-
-          case 'recommend_product':
-            result = await executeRecommendProduct(
-              toolInput as { 
-                environment: string; 
-                needs?: string[]; 
-                width?: number; 
-                height?: number; 
-                rain_region?: boolean 
-              }
+          case 'create_payment_link':
+            result = await executeCreatePaymentLink(
+              toolInput as { product_name: string; model: string; color?: string; width?: number; height?: number; glass_type?: string; quantity: number; customer_name: string; customer_phone: string; include_kit_acabamento?: boolean }
             )
             break
 
@@ -276,13 +487,13 @@ export async function processMessage(
 
       response = await openai.chat.completions.create({
         model: 'gpt-4o',
-        max_tokens: isML ? 200 : 500,
+        max_tokens: isML ? 200 : 1000,
         messages: [
           { role: 'system', content: systemPrompt },
           ...messages
         ],
-        tools: agentTools,
-        tool_choice: 'auto'
+        tools: activeTools.length > 0 ? activeTools : undefined,
+        tool_choice: activeTools.length > 0 ? 'auto' : undefined
       })
 
       totalTokens += response.usage?.total_tokens ?? 0
@@ -294,12 +505,24 @@ export async function processMessage(
       return { success: false, error: 'No response generated' }
     }
 
-    // Formatar resposta conforme canal
-    const formattedResponse = isML 
-      ? formatForML(finalResponse)
-      : formatForWhatsApp(finalResponse)
+    // ===== PARSEAR RESPOSTA: separar MENSAGEM do JSON =====
+    const { message: customerMessage, crmData } = parseAgentResponse(finalResponse)
 
-    console.log(`[Agent ${context.channel}] Response generated (${formattedResponse.length} chars)`)
+    // Formatar resposta conforme canal
+    const formattedResponse = isML
+      ? formatForML(customerMessage)
+      : formatForWhatsApp(customerMessage)
+
+    console.log(`[Agent ${context.channel}] Response generated (${formattedResponse.length} chars)${crmData ? ` | CRM stage: ${crmData.stage_suggested}` : ' | No CRM data'}`)
+
+    // ===== AUTO-UPDATE CRM a partir do JSON =====
+    if (!isML && crmData && lead && conversation) {
+      try {
+        await processCRMOutput(crmData, lead, conversation)
+      } catch (err) {
+        console.warn('[CRM] Error processing CRM output:', err)
+      }
+    }
 
     // ===== COMPORTAMENTO POR CANAL =====
     if (isML) {
@@ -318,20 +541,31 @@ export async function processMessage(
     }
 
     const evolution = getEvolutionProvider()
-    
-    // Dividir mensagens longas para envio mais natural
-    const messageParts = splitLongMessage(formattedResponse, 350)
+
+    // Dividir por separadores intencionais da IA (---) primeiro, depois por tamanho
+    const aiParts = formattedResponse.split(/\n?---\n?/).filter((p: string) => p.trim()).slice(0, 3)
+    const messageParts: string[] = []
+    for (const part of aiParts) {
+      const trimmed = part.trim()
+      if (trimmed.length > 300) {
+        messageParts.push(...splitLongMessage(trimmed, 250))
+      } else {
+        messageParts.push(trimmed)
+      }
+    }
+    // Hard limit: nunca mais que 3 mensagens de uma vez
+    if (messageParts.length > 3) messageParts.length = 3
     const sentParts: string[] = []
-    
+
     try {
       for (let i = 0; i < messageParts.length; i++) {
         const part = messageParts[i]
-        
+
         // Delay entre mensagens (exceto primeira)
         if (i > 0) {
           await sleep(getDelayBetweenMessages())
         }
-        
+
         // Simular digitação
         const typingTime = calculateTypingTime(part)
         try {
@@ -339,16 +573,14 @@ export async function processMessage(
           await sleep(typingTime)
         } catch (presenceError) {
           console.warn('Presence error (non-critical):', presenceError)
-          // Mesmo sem presence, aguarda um pouco antes de enviar
           await sleep(Math.min(typingTime, 1000))
         }
-        
+
         await evolution.sendText(lead.phone, part)
         sentParts.push(part)
       }
     } catch (sendError) {
       console.error('Error sending message parts:', sendError)
-      // Se falhar no meio, tenta enviar o restante
       for (let i = sentParts.length; i < messageParts.length; i++) {
         try {
           await evolution.sendText(lead.phone, messageParts[i])
@@ -359,22 +591,22 @@ export async function processMessage(
       }
     }
 
-    // Salvar todas as partes como uma resposta no banco
+    // Salvar mensagem no banco (sem o JSON, apenas texto)
     if (conversation) {
       await getSupabase().from('dc_messages').insert({
         conversation_id: conversation.id,
         lead_id: lead.id,
         direction: 'outbound',
         sender_type: 'agent',
-        content: formattedResponse,
+        content: messageParts.join('\n\n'),
         ai_tokens_used: totalTokens,
         ai_model: 'gpt-4o',
-        metadata: { 
-          iterations, 
+        metadata: {
+          iterations,
           response_time_ms: Date.now() - startTime,
           tools_used: toolsUsed,
-          message_parts: messageParts.length > 1 ? messageParts.length : undefined,
-          original_response: finalResponse !== formattedResponse ? finalResponse : undefined
+          crm_data: crmData || undefined,
+          message_parts: messageParts.length > 1 ? messageParts.length : undefined
         }
       })
     }
@@ -397,6 +629,7 @@ export async function processMessage(
     }
   }
 }
+
 
 /**
  * Wrapper para compatibilidade com código legado (WhatsApp)
@@ -647,8 +880,7 @@ export async function generatePostSaleMessage(
     const message = response.choices[0]?.message?.content?.trim() || ''
     const tokensUsed = response.usage?.total_tokens || 0
     
-    // Garante que está dentro do limite
-    const formattedMessage = formatForML(message)
+    const formattedMessage = truncateMessage(formatForML(message), 350)
     
     console.log(`[PostSale Agent] Generated ${messageType} message (${formattedMessage.length} chars)`)
     
@@ -845,51 +1077,3 @@ function extractGlassChoice(text: string): string | null {
   return null
 }
 
-// =====================================================
-// DETECÇÃO DE MEDIDAS NÃO PADRÃO
-// =====================================================
-
-/**
- * Detecta se a resposta do agente menciona medidas não padrão
- * Usado para escalar automaticamente para revisão humana
- */
-export function detectNonStandardMeasurement(
-  response: string,
-  toolsUsed: string[]
-): { isNonStandard: boolean; reason?: string } {
-  // Se não usou validate_measurement, provavelmente não é sobre medidas
-  if (!toolsUsed.includes('validate_measurement')) {
-    return { isNonStandard: false }
-  }
-
-  // Patterns que indicam medida não padrão
-  const patterns = [
-    /n[aã]o s[aã]o padr[oõ]es/i,
-    /n[aã]o [eé] padr[aã]o/i,
-    /medida n[aã]o padr[aã]o/i,
-    /padr[oõ]es mais pr[oó]ximos?:/i,
-    /medidas? pr[oó]ximas?:/i,
-    /fora do padr[aã]o/i,
-    /altura e largura n[aã]o s[aã]o/i,
-    /essa altura e largura n[aã]o/i
-  ]
-
-  for (const pattern of patterns) {
-    if (pattern.test(response)) {
-      // Tentar extrair a medida mencionada
-      const measureMatch = response.match(/(\d+)\s*x\s*(\d+)/i)
-      if (measureMatch) {
-        return {
-          isNonStandard: true,
-          reason: `Medida ${measureMatch[1]}x${measureMatch[2]}cm não é padrão`
-        }
-      }
-      return {
-        isNonStandard: true,
-        reason: 'Medida não padrão detectada na resposta'
-      }
-    }
-  }
-
-  return { isNonStandard: false }
-}

@@ -2,28 +2,17 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type {
   CheckOrderResult,
   EscalateResult,
-  ScheduleFollowUpResult,
   CalculateShippingResult,
   ProductInfoResult,
-  UpdateLeadResult,
-  ValidateMeasurementResult,
-  RecommendProductResult
+  CreatePaymentLinkResult,
 } from './index'
 import {
-  validateMeasurement,
-  validateDrywallDepth,
-  INSTALLATION_CLEARANCE,
-  STANDARD_HEIGHTS,
-  STANDARD_WIDTHS,
-  RECOMMENDED_SIZES,
-  LIMITS
-} from '../knowledge/measurements'
-import {
-  MODELS,
-  GLASSES,
-  getRecommendedModelForEnvironment,
-  getRecommendedGlassForEnvironment
-} from '../knowledge/products'
+  getValidDimensions,
+  findPriceTable,
+  formatProductName,
+  type ProductType,
+  type ProductColor,
+} from '@/lib/data/shopify-prices'
 
 function getSupabase() { return createAdminClient() }
 
@@ -32,24 +21,17 @@ export async function executeCheckOrderStatus(
   leadId: string
 ): Promise<CheckOrderResult> {
   try {
-    let query = getSupabase().from('dc_orders').select('*')
+    // Consultar tabela orders do sistema de producao (nao dc_orders)
+    let query = getSupabase()
+      .from('orders')
+      .select('id, customer_name, model, color, glass_type, height_cm, width_cm, production_status, is_finished, codigo_rastreio, bling_order_number, created_at, updated_at')
 
     if (input.order_number) {
       const orderNum = input.order_number.replace('#', '').trim()
-      query = query.eq('order_number', orderNum)
+      query = query.eq('bling_order_number', orderNum)
     } else if (input.phone) {
-      // Buscar lead pelo telefone e depois os pedidos
-      const { data: lead } = await getSupabase()
-        .from('dc_leads')
-        .select('id')
-        .eq('phone', input.phone.replace(/\D/g, ''))
-        .single()
-
-      if (lead) {
-        query = query.eq('lead_id', lead.id)
-      }
+      query = query.eq('customer_phone', input.phone.replace(/\D/g, ''))
     } else {
-      // Usar o lead_id atual
       query = query.eq('lead_id', leadId)
     }
 
@@ -60,7 +42,7 @@ export async function executeCheckOrderStatus(
     if (!orders || orders.length === 0) {
       return {
         found: false,
-        message: 'Não encontrei pedidos para este cliente.'
+        message: 'Nao encontrei pedidos para este cliente. Verifique o numero do pedido ou confirme o telefone.'
       }
     }
 
@@ -69,22 +51,22 @@ export async function executeCheckOrderStatus(
       'pago': 'Pagamento confirmado',
       'cancelado': 'Cancelado',
       'cadastrado': 'Cadastrado no sistema',
-      'em_producao': 'Em produção 🏭',
-      'pronto': 'Pronto para envio ✅',
-      'enviado': 'Enviado 📦',
-      'entregue': 'Entregue ✅'
+      'em_producao': 'Em producao',
+      'pronto': 'Pronto para envio',
+      'enviado': 'Enviado',
+      'entregue': 'Entregue'
     }
 
     return {
       found: true,
       orders: orders.map(o => ({
-        order_number: o.order_number || o.external_id || 'N/A',
-        status: statusMap[o.status] || o.status,
-        production_status: statusMap[o.production_status] || o.production_status,
-        tracking_code: o.tracking_code || undefined,
+        order_number: o.bling_order_number || 'N/A',
+        status: o.is_finished ? 'Finalizado' : (statusMap[o.production_status] || o.production_status || 'Em processamento'),
+        production_status: statusMap[o.production_status] || o.production_status || 'Pendente',
+        tracking_code: o.codigo_rastreio || undefined,
         created_at: o.created_at
       })),
-      message: `Encontrei ${orders.length} pedido(s) para este cliente.`
+      message: `Encontrei ${orders.length} pedido(s). Modelo: ${orders[0].model} ${orders[0].color} ${orders[0].width_cm}x${orders[0].height_cm}cm. Ultima atualizacao: ${new Date(orders[0].updated_at).toLocaleDateString('pt-BR')}.`
     }
   } catch (error) {
     console.error('Error checking order status:', error)
@@ -141,41 +123,6 @@ export async function executeEscalateToHuman(
   }
 }
 
-export async function executeScheduleFollowUp(
-  input: { type: string; days_from_now: number; message?: string },
-  leadId: string,
-  orderId?: string
-): Promise<ScheduleFollowUpResult> {
-  try {
-    const scheduledFor = new Date()
-    scheduledFor.setDate(scheduledFor.getDate() + input.days_from_now)
-    scheduledFor.setHours(10, 0, 0, 0) // Agendar para 10h
-
-    const { error } = await getSupabase().from('dc_follow_ups').insert({
-      lead_id: leadId,
-      order_id: orderId || null,
-      type: input.type as 'post_delivery' | 'installation' | 'reactivation' | 'review' | 'custom',
-      scheduled_for: scheduledFor.toISOString(),
-      message_template: input.message || null,
-      status: 'pending'
-    })
-
-    if (error) throw error
-
-    return {
-      success: true,
-      scheduled_for: scheduledFor.toISOString(),
-      message: `Follow-up agendado para ${scheduledFor.toLocaleDateString('pt-BR')}.`
-    }
-  } catch (error) {
-    console.error('Error scheduling follow-up:', error)
-    return {
-      success: false,
-      scheduled_for: '',
-      message: 'Erro ao agendar follow-up.'
-    }
-  }
-}
 
 export async function executeCalculateShipping(
   input: { 
@@ -218,25 +165,26 @@ export async function executeCalculateShipping(
   // Fora de SP (CEP não 0*): Melhor Envio + R$20 + 4 dias (já calculado em calculateWindowFreight)
 
   if (freight.isSP) {
-    // Regra SP: R$55 fixo no ML/WPP, grátis no Shopify
-    const finalCost = source === 'shopify' ? 0 : freight.value
+    // Grátis para WhatsApp e Shopify, R$55 apenas Mercado Livre
+    const finalCost = source === 'mercadolivre' ? freight.value : 0
 
-    // Cálculo de próxima quinta-feira
+    // Entregas SP: terça e quinta
+    // Pedido seg-qua → próxima terça | Pedido qui-dom → próxima quinta
     const today = new Date()
-    const dayOfWeek = today.getDay()
-    const nextThursday = new Date(today)
-    const daysUntilThursday = (4 - dayOfWeek + 7) % 7
-    if (dayOfWeek <= 1) {
-      nextThursday.setDate(today.getDate() + daysUntilThursday)
+    const dayOfWeek = today.getDay() // 0=dom, 1=seg, 2=ter, 3=qua, 4=qui, 5=sex, 6=sab
+    const nextDelivery = new Date(today)
+
+    if (dayOfWeek >= 1 && dayOfWeek <= 3) {
+      // Seg, Ter, Qua → próxima Terça
+      const daysUntilTuesday = (2 - dayOfWeek + 7) % 7 || 7
+      nextDelivery.setDate(today.getDate() + daysUntilTuesday)
     } else {
-      nextThursday.setDate(today.getDate() + daysUntilThursday + 7)
+      // Qui, Sex, Sab, Dom → próxima Quinta
+      const daysUntilThursday = (4 - dayOfWeek + 7) % 7 || 7
+      nextDelivery.setDate(today.getDate() + daysUntilThursday)
     }
 
-    const freteMsg = source === 'shopify' 
-      ? 'Frete GRÁTIS' 
-      : `Frete: R$ ${finalCost.toFixed(2).replace('.', ',')}`
-
-    console.log('[ExecuteCalculateShipping] SP - Valor final:', finalCost)
+    console.log('[ExecuteCalculateShipping] SP - Valor final:', finalCost, '| Próxima entrega:', nextDelivery.toISOString().split('T')[0])
 
     return {
       cep,
@@ -244,25 +192,17 @@ export async function executeCalculateShipping(
       delivery_type: 'sp_delivery',
       estimated_days: freight.estimatedDays,
       shipping_cost: finalCost,
-      next_delivery_date: nextThursday.toISOString(),
+      next_delivery_date: nextDelivery.toISOString(),
       carrier: freight.carrier,
-      message: `Entrega em SP! Próxima data: ${nextThursday.toLocaleDateString('pt-BR')} (quinta). ${freteMsg}.`
+      is_free: finalCost === 0,
+      message: ''
     }
   }
 
-  // ===== FORA DE SP (CEP não começa com 0) =====
-  // O valor já vem com +R$20 e prazo já vem com +4 dias (calculado em calculateWindowFreight)
   const unitPrice = (freight as { unitPrice?: number }).unitPrice
   const freightQty = (freight as { quantity?: number }).quantity || quantity
   
   console.log('[ExecuteCalculateShipping] Fora de SP - Valor total:', freight.value, '| Unitário:', unitPrice, '| Qtd:', freightQty, '| Prazo:', freight.estimatedDays)
-
-  // Montar mensagem com detalhes de quantidade se > 1
-  let message = `Frete para ${cep.replace(/(\d{5})(\d{3})/, '$1-$2')}: R$ ${freight.value.toFixed(2).replace('.', ',')} via ${freight.carrier}. Prazo: ${freight.estimatedDays} dias úteis.`
-  
-  if (freightQty > 1 && unitPrice) {
-    message = `Frete para ${cep.replace(/(\d{5})(\d{3})/, '$1-$2')}: R$ ${freight.value.toFixed(2).replace('.', ',')} (${freightQty}x R$ ${unitPrice.toFixed(2).replace('.', ',')}) via ${freight.carrier}. Prazo: ${freight.estimatedDays} dias úteis.`
-  }
 
   return {
     cep,
@@ -271,15 +211,14 @@ export async function executeCalculateShipping(
     estimated_days: freight.estimatedDays,
     shipping_cost: freight.value,
     carrier: freight.carrier,
-    message,
-    // Informações adicionais
+    message: '',
     unit_price: unitPrice,
     quantity: freightQty
   }
 }
 
 export async function executeGetProductInfo(
-  input: { 
+  input: {
     model: string
     width?: number
     height?: number
@@ -291,42 +230,22 @@ export async function executeGetProductInfo(
     payment_method?: 'cartao' | 'boleto' | 'pix'
   }
 ): Promise<ProductInfoResult> {
-  // Importar serviço de preços
-  const { 
-    getProductPrice, 
-    isKitArremate, 
+  const {
+    getProductPrice,
+    isKitArremate,
     canSellOnChannel,
-    formatProductName
   } = await import('@/lib/services/product-price.service')
-  
-  type ProductType = '2f' | '2f_grade' | '3f' | '3f_grade' | '3f_tela' | '3f_tela_grade' | 'capelinha' | 'capelinha_3v' | 'arremate'
-  type ProductColor = 'branco' | 'preto'
-  type SalesChannel = 'whatsapp' | 'mercadolivre' | 'shopify'
-  type PaymentMethod = 'cartao' | 'boleto' | 'pix'
-  
+
   const tipo = input.model as ProductType
   const cor = (input.color || 'branco') as ProductColor
   const quantidade = input.quantity || 1
-  const canal = (input.channel || 'whatsapp') as SalesChannel
-  const pagamento = input.payment_method as PaymentMethod | undefined
-  
-  // Usar dados do knowledge base para informações do modelo
-  const modelSpec = MODELS[input.model]
-  
-  // Nomes dos vidros (para exibição)
-  const glassNames: Record<string, string> = {
-    'comum': 'Vidro Comum',
-    'incolor': 'Vidro Incolor',
-    'temperado': 'Vidro Temperado',
-    'mini_boreal': 'Vidro Mini Boreal',
-    'fume': 'Vidro Fumê'
-  }
+  const canal = (input.channel || 'whatsapp') as 'whatsapp' | 'mercadolivre' | 'shopify'
+  const pagamento = input.payment_method as 'cartao' | 'boleto' | 'pix' | undefined
 
   // ========================================
   // Kit Arremate - Tratamento especial
   // ========================================
   if (isKitArremate(tipo)) {
-    // Verificar canal
     if (!canSellOnChannel(tipo, canal)) {
       return {
         available: false,
@@ -334,7 +253,7 @@ export async function executeGetProductInfo(
         message: 'O Kit Arremate não está disponível no Mercado Livre. É vendido apenas pelo WhatsApp e na loja Shopify.'
       }
     }
-    
+
     const result = getProductPrice({
       tipo,
       cor,
@@ -343,49 +262,60 @@ export async function executeGetProductInfo(
       quantidade: 1,
       canal
     })
-    
-    let message = `Kit Arremate ${cor === 'preto' ? 'Preto' : 'Branco'}: R$ 117,00 (preço especial, normal R$180). Inclui todas as peças de acabamento com corte em 45º. Um kit por pedido, independente da quantidade de janelas.`
-    
-    // Adicionar link se disponível
-    if (result.link) {
-      message += ` Link: ${result.link}`
-    }
-    
+
     return {
       available: true,
       model: result.produto || 'Kit Arremate',
+      color: cor,
       price: result.preco,
+      originalPrice: 180,
       link: result.link,
-      message
+      message: ''
     }
   }
 
   // ========================================
-  // Grade genérico - Redirecionar
-  // ========================================
-  if (input.model === 'grade') {
-    return {
-      available: true,
-      model: 'Janela com Grade',
-      message: 'Temos grade embutida para janelas 2 e 3 folhas. Qual você prefere? 2 Folhas com Grade (2f_grade), 3 Folhas com Grade (3f_grade), ou 3 Folhas com Tela e Grade (3f_tela_grade)?'
-    }
-  }
-
-  // ========================================
-  // Se não tem medidas, pedir
+  // Se não tem medidas → retornar dimensões disponíveis + faixa de preço
   // ========================================
   if (!input.width || !input.height) {
-    const nomeProduto = modelSpec?.name || formatProductName(tipo, cor)
-    const descricao = modelSpec?.description || ''
+    const nomeProduto = formatProductName(tipo, cor, input.orientation)
+
+    // Tentar obter dimensões disponíveis para ambas as cores
+    const dimensionsBranco = getValidDimensions(tipo, 'branco', input.orientation)
+    const dimensionsPreto = getValidDimensions(tipo, 'preto', input.orientation)
+    const dimensions = cor === 'preto' ? dimensionsPreto : dimensionsBranco
+
+    if (!dimensions) {
+      return {
+        available: false,
+        model: nomeProduto,
+        message: `Modelo "${nomeProduto}" não encontrado no catálogo.`
+      }
+    }
+
+    // Calcular faixa de preço
+    const table = findPriceTable(tipo, cor, input.orientation)
+    let priceMin = Infinity
+    let priceMax = 0
+    if (table) {
+      for (const v of table.variantes) {
+        if (v.preco < priceMin) priceMin = v.preco
+        if (v.preco > priceMax) priceMax = v.preco
+      }
+    }
+
     return {
       available: true,
       model: nomeProduto,
-      message: `${nomeProduto}: ${descricao} Para calcular o valor, me passa as medidas (largura x altura em cm).`
+      color: cor,
+      availableSizes: dimensions,
+      priceRange: table ? { min: priceMin, max: priceMax } : undefined,
+      message: `${nomeProduto}: Alturas disponíveis: ${dimensions.alturas.join(', ')}cm. Larguras disponíveis: ${dimensions.larguras.join(', ')}cm.${table ? ` Preços de R$${priceMin} a R$${priceMax}.` : ''}`
     }
   }
 
   // ========================================
-  // Buscar preço real do catálogo Shopify
+  // COM medidas → buscar preço exato do catálogo Shopify
   // ========================================
   const result = getProductPrice({
     tipo,
@@ -399,288 +329,130 @@ export async function executeGetProductInfo(
     pagamento
   })
 
-  // Se não encontrou a variante
   if (!result.found) {
+    // Medida não encontrada - retornar medidas disponíveis para ajudar
+    const dimensions = getValidDimensions(tipo, cor, input.orientation)
     return {
       available: false,
-      model: result.produto || formatProductName(tipo, cor),
+      model: result.produto || formatProductName(tipo, cor, input.orientation),
       dimensions: { width: input.width, height: input.height },
-      message: result.erro || 'Medida não disponível. Verifique as dimensões válidas.'
+      availableSizes: dimensions || undefined,
+      message: result.erro || `Medida ${input.width}x${input.height}cm não disponível.${dimensions ? ` Alturas: ${dimensions.alturas.join(', ')}cm. Larguras: ${dimensions.larguras.join(', ')}cm.` : ''}`
     }
   }
 
-  // ========================================
-  // Construir mensagem de resposta
-  // ========================================
-  const vidroInfo = input.glass_type ? ` com ${glassNames[input.glass_type] || input.glass_type}` : ''
-  const qtdInfo = quantidade > 1 ? ` (${quantidade} unidades)` : ''
-  
-  // Alertas específicos do modelo
-  let alert = ''
+  const precoFinal = result.precoComDesconto || result.precoTotal || result.preco || 0
+
+  const alerts: string[] = []
   if (tipo === 'capelinha' || tipo === 'capelinha_3v') {
-    alert = ' Lembre: pode respingar em chuva muito forte.'
+    alerts.push('Pode respingar em chuva muito forte.')
   }
   if (tipo.includes('grade')) {
-    alert = ' Grade embutida, adiciona +1,5cm na profundidade.'
+    alerts.push('Grade embutida, adiciona +1,5cm na profundidade.')
   }
-
-  // Preço final (com ou sem desconto)
-  const precoFinal = result.precoComDesconto || result.precoTotal || result.preco || 0
-  const precoFormatado = `R$ ${precoFinal.toFixed(2).replace('.', ',')}`
-  
-  // Informações de desconto
-  let descontoInfo = ''
-  if (result.desconto && result.desconto.valorTotal > 0) {
-    const descontos: string[] = []
-    if (result.desconto.percentualQuantidade > 0) {
-      descontos.push(`${(result.desconto.percentualQuantidade * 100).toFixed(0)}% quantidade`)
-    }
-    if (result.desconto.percentualPix > 0) {
-      descontos.push(`${(result.desconto.percentualPix * 100).toFixed(0)}% Pix`)
-    }
-    descontoInfo = ` (inclui desconto: ${descontos.join(' + ')})`
-  }
-
-  // Mensagem final
-  let message = `*${result.produto}* ${input.width}x${input.height}cm${vidroInfo}${qtdInfo}: *${precoFormatado}*${descontoInfo}.${alert}`
-  
-  // Adicionar avisos se houver
   if (result.avisos && result.avisos.length > 0) {
-    message += ` ${result.avisos.join(' ')}`
+    alerts.push(...result.avisos)
   }
-  
-  // Adicionar link se disponível (apenas para WhatsApp/Shopify, não ML)
-  if (result.link && canal !== 'mercadolivre') {
-    message += ` Link para compra: ${result.link}`
-  }
-  
-  message += ' Quer que eu calcule o frete?'
 
   return {
     available: true,
-    model: result.produto || formatProductName(tipo, cor),
+    model: result.produto || formatProductName(tipo, cor, input.orientation),
     dimensions: { width: input.width, height: input.height },
-    price: precoFinal,
+    glass: input.glass_type || undefined,
+    color: cor,
+    quantity: quantidade,
+    price: result.preco || 0,
+    priceTotal: result.precoTotal || precoFinal,
+    priceFinal: precoFinal,
+    discount: result.desconto ? {
+      quantityPercent: result.desconto.percentualQuantidade || 0,
+      pixPercent: result.desconto.percentualPix || 0,
+      totalValue: result.desconto.valorTotal || 0
+    } : undefined,
     link: result.link,
-    message
+    alerts,
+    message: ''
   }
 }
 
-export async function executeUpdateLeadInfo(
-  input: { name?: string; email?: string; cep?: string; cpf?: string; notes?: string },
-  leadId: string
-): Promise<UpdateLeadResult> {
+export async function executeCreatePaymentLink(
+  input: {
+    product_name: string
+    model: string
+    color?: string
+    width?: number
+    height?: number
+    glass_type?: string
+    quantity: number
+    customer_name: string
+    customer_phone: string
+    include_kit_acabamento?: boolean
+  }
+): Promise<CreatePaymentLinkResult> {
+  const { findProductSku, findOrCreateCustomer, createPaymentLink } = await import('@/lib/providers/yampi')
+
   try {
-    const updates: Record<string, string> = {}
-    const updatedFields: string[] = []
+    // 1. Buscar SKU do produto na Yampi
+    const sku = await findProductSku({
+      model: input.model,
+      color: input.color,
+      glass_type: input.glass_type,
+      width: input.width,
+      height: input.height,
+    })
 
-    if (input.name) {
-      updates.name = input.name
-      updatedFields.push('nome')
-    }
-    if (input.email) {
-      updates.email = input.email
-      updatedFields.push('email')
-    }
-    if (input.cep) {
-      updates.cep = input.cep.replace(/\D/g, '')
-      updatedFields.push('CEP')
-    }
-    if (input.cpf) {
-      updates.cpf = input.cpf.replace(/\D/g, '')
-      updatedFields.push('CPF')
-    }
-    if (input.notes) {
-      updates.notes = input.notes
-      updatedFields.push('observações')
-    }
-
-    if (Object.keys(updates).length === 0) {
+    if (!sku) {
       return {
         success: false,
-        updated_fields: [],
-        message: 'Nenhuma informação para atualizar.'
+        message: 'Produto não encontrado na Yampi. Verifique modelo e medidas.',
       }
     }
 
-    const { error } = await getSupabase()
-      .from('dc_leads')
-      .update(updates)
-      .eq('id', leadId)
+    // 2. Buscar/criar cliente
+    const customer = await findOrCreateCustomer({
+      name: input.customer_name,
+      phone: input.customer_phone,
+    })
 
-    if (error) throw error
+    // 3. Montar SKUs array (produto + kit acabamento se solicitado)
+    const skus: Array<{ id: number; quantity: number }> = [
+      { id: sku.skuId, quantity: input.quantity },
+    ]
+
+    if (input.include_kit_acabamento) {
+      const kitSku = await findProductSku({ model: 'arremate' })
+      if (kitSku) {
+        skus.push({ id: kitSku.skuId, quantity: 1 })
+      }
+    }
+
+    // 4. Criar payment link
+    const linkName = `${input.product_name} - ${input.customer_name}`
+    const result = await createPaymentLink({
+      name: linkName,
+      skus,
+      customerId: customer?.customerId,
+    })
+
+    if (!result.success) {
+      return {
+        success: false,
+        message: result.error || 'Erro ao criar link de pagamento.',
+      }
+    }
 
     return {
       success: true,
-      updated_fields: updatedFields,
-      message: `Informações atualizadas: ${updatedFields.join(', ')}.`
+      payment_url: result.linkUrl,
+      whatsapp_url: result.whatsappLink,
+      message: 'Link de pagamento criado com sucesso.',
     }
-  } catch (error) {
-    console.error('Error updating lead info:', error)
+  } catch (err) {
+    console.error('[CreatePaymentLink] Erro:', err)
     return {
       success: false,
-      updated_fields: [],
-      message: 'Erro ao atualizar informações.'
+      message: 'Erro ao criar link de pagamento. Tente novamente.',
     }
   }
 }
 
-// =====================================================
-// NOVAS TOOLS
-// =====================================================
-
-export async function executeValidateMeasurement(
-  input: {
-    width: number
-    height: number
-    cep?: string
-    wall_type?: string
-    wall_depth?: number
-    model?: string
-  }
-): Promise<ValidateMeasurementResult> {
-  const validation = validateMeasurement(input.width, input.height, input.cep)
-  
-  // Verificar drywall se aplicável
-  let drywallCheck: { isValid: boolean; minRequired: number; message: string } | undefined
-  if (input.wall_type === 'drywall' && input.wall_depth && input.model) {
-    drywallCheck = validateDrywallDepth(input.model, input.wall_depth)
-    if (!drywallCheck.isValid) {
-      validation.errors.push(drywallCheck.message)
-    }
-  }
-  
-  // Verificar limite de transporte para fora de SP
-  const isSP = input.cep?.startsWith('0') || false
-  if (!isSP && input.width > LIMITS.maxOutsideSP.width) {
-    validation.errors.push(`Para fora de SP, a largura máxima é ${LIMITS.maxOutsideSP.width}cm (limite de transporte).`)
-    validation.isValid = false
-  }
-  
-  // Construir mensagem amigável
-  let message = ''
-  if (!validation.isValid) {
-    message = `⚠️ ${validation.errors.join(' ')}`
-  } else if (input.width !== validation.normalizedWidth || input.height !== validation.normalizedHeight) {
-    message = `Sua medida de ${input.width}x${input.height}cm fica ${validation.normalizedWidth}x${validation.normalizedHeight}cm (ajustada para múltiplo de 0,5cm). `
-    
-    // Verificar se é medida padrão
-    const isStandardHeight = STANDARD_HEIGHTS.includes(validation.normalizedHeight)
-    const isStandardWidth = STANDARD_WIDTHS.includes(validation.normalizedWidth)
-    
-    if (!isStandardHeight || !isStandardWidth) {
-      message += `A medida padrão mais próxima é ${validation.nearestStandard.width}x${validation.nearestStandard.height}cm. `
-    }
-    
-    message += `Posso seguir com ${validation.normalizedWidth}x${validation.normalizedHeight}cm?`
-  } else {
-    message = `✅ Medida ${validation.normalizedWidth}x${validation.normalizedHeight}cm válida!`
-  }
-  
-  // Adicionar warnings
-  if (validation.warnings.length > 0) {
-    message += ` Obs: ${validation.warnings.join('. ')}`
-  }
-
-  return {
-    isValid: validation.isValid,
-    originalWidth: input.width,
-    originalHeight: input.height,
-    normalizedWidth: validation.normalizedWidth,
-    normalizedHeight: validation.normalizedHeight,
-    nearestStandard: validation.nearestStandard,
-    clearanceNeeded: {
-      lateral: INSTALLATION_CLEARANCE.lateral,
-      top: INSTALLATION_CLEARANCE.topo
-    },
-    errors: validation.errors,
-    warnings: validation.warnings,
-    drywallCheck,
-    message
-  }
-}
-
-export async function executeRecommendProduct(
-  input: {
-    environment: string
-    needs?: string[]
-    width?: number
-    height?: number
-    rain_region?: boolean
-  }
-): Promise<RecommendProductResult> {
-  const needs = input.needs || []
-  const warnings: string[] = []
-  
-  // Obter modelos recomendados para o ambiente
-  const recommendedModels = getRecommendedModelForEnvironment(input.environment)
-  let recommendedModelId = recommendedModels[0]
-  
-  // Ajustar baseado nas necessidades
-  if (needs.includes('ventilacao')) {
-    // Preferir modelos com mais ventilação
-    if (recommendedModels.includes('3f')) recommendedModelId = '3f'
-    if (recommendedModels.includes('capelinha')) recommendedModelId = 'capelinha'
-  }
-  
-  if (needs.includes('insetos')) {
-    // Preferir modelos com tela
-    if (recommendedModels.includes('2f_tela')) recommendedModelId = '2f_tela'
-    if (recommendedModels.includes('3f_tela')) recommendedModelId = '3f_tela'
-  }
-  
-  if (needs.includes('seguranca')) {
-    recommendedModelId = 'grade'
-  }
-  
-  // Se região com muita chuva e modelo é capelinha, alertar
-  if (input.rain_region && recommendedModelId === 'capelinha') {
-    warnings.push('Região com muita chuva: Capelinha pode respingar em chuvas fortes. Considere janela de correr.')
-    recommendedModelId = '3f' // Trocar para correr
-  }
-  
-  // Obter vidro recomendado
-  let recommendedGlassId = getRecommendedGlassForEnvironment(input.environment)
-  
-  if (needs.includes('privacidade')) {
-    recommendedGlassId = 'mini_boreal'
-  }
-  if (needs.includes('iluminacao')) {
-    recommendedGlassId = 'incolor'
-  }
-  
-  // Obter especificações
-  const model = MODELS[recommendedModelId] || MODELS['2f']
-  const glass = GLASSES[recommendedGlassId] || GLASSES['incolor']
-  
-  // Obter medidas sugeridas
-  const suggestedSizes = RECOMMENDED_SIZES[input.environment] || RECOMMENDED_SIZES['sala']
-  
-  // Filtrar por medidas disponíveis se informadas
-  let filteredSizes = suggestedSizes
-  if (input.width && input.height) {
-    // Encontrar medidas que cabem no vão
-    filteredSizes = suggestedSizes.filter(s => 
-      s.width <= input.width! && s.height <= input.height!
-    )
-    if (filteredSizes.length === 0) {
-      filteredSizes = suggestedSizes.slice(0, 3) // Fallback para as 3 primeiras
-      warnings.push(`As medidas sugeridas são maiores que seu vão (${input.width}x${input.height}cm). Confira as medidas.`)
-    }
-  }
-  
-  // Construir mensagem
-  const needsText = needs.length > 0 ? ` (prioridade: ${needs.join(', ')})` : ''
-  const message = `Para ${input.environment}${needsText}, recomendo: *${model.name}* com vidro *${glass.name}*. ${model.description}`
-
-  return {
-    recommendedModel: recommendedModelId,
-    modelName: model.name,
-    recommendedGlass: recommendedGlassId,
-    glassName: glass.name,
-    suggestedSizes: filteredSizes.slice(0, 3),
-    features: model.features,
-    warnings,
-    message
-  }
-}

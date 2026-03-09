@@ -1,5 +1,5 @@
 import type { Lead, Conversation } from '@/types/database'
-import type { AgentContext } from '@/types/agent'
+import type { AgentContext, IncomingProductContext } from '@/types/agent'
 import { processMessage } from './agent.service'
 
 /**
@@ -13,6 +13,7 @@ interface BufferedMessage {
   content: string
   mediaType?: string
   receivedAt: Date
+  productContext?: IncomingProductContext
 }
 
 interface MessageBuffer {
@@ -20,13 +21,15 @@ interface MessageBuffer {
   conversation: Conversation
   messages: BufferedMessage[]
   timeoutId: NodeJS.Timeout | null
+  productContext?: IncomingProductContext
 }
 
 // Map de buffers por leadId
 const messageBuffers = new Map<string, MessageBuffer>()
 
 // Configurações
-const BUFFER_TIMEOUT_MS = 3000 // 3 segundos de espera após última mensagem
+const BUFFER_TIMEOUT_MS = 8000 // 8 segundos - simula tempo de leitura humano
+const TYPING_STOPPED_MS = 3000 // 3 segundos após parar de digitar
 const MAX_BUFFER_SIZE = 10     // Máximo de mensagens no buffer
 const MAX_BUFFER_AGE_MS = 30000 // Máximo de 30 segundos de buffer total
 
@@ -38,7 +41,8 @@ export function bufferMessage(
   lead: Lead,
   conversation: Conversation,
   content: string,
-  mediaType?: string
+  mediaType?: string,
+  productContext?: IncomingProductContext
 ): void {
   const leadId = lead.id
   
@@ -71,11 +75,17 @@ export function bufferMessage(
     messageBuffers.set(leadId, buffer)
   }
   
+  // Salvar contexto do produto se presente
+  if (productContext) {
+    buffer.productContext = productContext
+  }
+
   // Adicionar mensagem ao buffer
   buffer.messages.push({
     content,
     mediaType,
-    receivedAt: new Date()
+    receivedAt: new Date(),
+    productContext
   })
   
   // Se atingiu o máximo, processar imediatamente
@@ -124,15 +134,43 @@ async function processBufferedMessages(leadId: string): Promise<void> {
   console.log(`Combined content: ${combinedContent.substring(0, 100)}...`)
   
   try {
-    // Processar mensagem combinada com contexto WhatsApp
     const context: AgentContext = {
       channel: 'whatsapp',
       leadId: buffer.lead.id,
-      conversationId: buffer.conversation.id
+      conversationId: buffer.conversation.id,
+      incomingProductContext: buffer.productContext
     }
     await processMessage(combinedContent, context, buffer.lead, buffer.conversation)
   } catch (error) {
     console.error('Error processing buffered messages:', error)
+  }
+}
+
+/**
+ * Chamada quando o cliente começa a digitar (PRESENCE_UPDATE: composing)
+ * Reseta o timer para dar mais tempo ao cliente
+ */
+export function onTypingStarted(leadId: string): void {
+  const buffer = messageBuffers.get(leadId)
+  if (buffer?.timeoutId) {
+    clearTimeout(buffer.timeoutId)
+    buffer.timeoutId = setTimeout(() => {
+      processBufferedMessages(leadId)
+    }, BUFFER_TIMEOUT_MS)
+  }
+}
+
+/**
+ * Chamada quando o cliente para de digitar (PRESENCE_UPDATE: paused/available)
+ * Reduz o timer para processar mais rápido
+ */
+export function onTypingStopped(leadId: string): void {
+  const buffer = messageBuffers.get(leadId)
+  if (buffer?.timeoutId) {
+    clearTimeout(buffer.timeoutId)
+    buffer.timeoutId = setTimeout(() => {
+      processBufferedMessages(leadId)
+    }, TYPING_STOPPED_MS)
   }
 }
 

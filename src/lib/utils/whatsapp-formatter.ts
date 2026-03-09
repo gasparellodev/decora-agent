@@ -49,15 +49,14 @@ export function formatForWhatsApp(text: string): string {
  * Simula velocidade de digitação humana mais natural
  */
 export function calculateTypingTime(text: string): number {
-  const CHARS_PER_SECOND = 5 // Velocidade mais rápida e natural
-  const MIN_TYPING_MS = 800   // mínimo 0.8 segundos
-  const MAX_TYPING_MS = 4000  // máximo 4 segundos
+  const CHARS_PER_SECOND = 3.5
+  const MIN_TYPING_MS = 1200
+  const MAX_TYPING_MS = 6000
 
   const chars = text.length
   const typingMs = (chars / CHARS_PER_SECOND) * 1000
 
-  // Adicionar pequena variação aleatória para parecer mais humano
-  const variation = Math.random() * 500 - 250 // ±250ms
+  const variation = Math.random() * 800 - 400 // ±400ms
   const finalTime = typingMs + variation
 
   return Math.min(MAX_TYPING_MS, Math.max(MIN_TYPING_MS, finalTime))
@@ -74,8 +73,8 @@ export function sleep(ms: number): Promise<void> {
  * Delay entre mensagens sequenciais para parecer mais natural
  */
 export function getDelayBetweenMessages(): number {
-  const MIN_DELAY = 600
-  const MAX_DELAY = 1200
+  const MIN_DELAY = 2000
+  const MAX_DELAY = 4000
   return MIN_DELAY + Math.random() * (MAX_DELAY - MIN_DELAY)
 }
 
@@ -176,4 +175,33 @@ function splitByChars(text: string, maxChars: number): string[] {
   }
   
   return messages
+}
+
+/**
+ * Trunca mensagem para caber no limite de caracteres, cortando na última
+ * sentença completa que cabe. Safety net para mensagens geradas pelo LLM
+ * que deveriam respeitar um limite mas nem sempre o fazem.
+ */
+export function truncateMessage(text: string, maxChars: number = 350): string {
+  if (!text) return ''
+  const trimmed = text.trim()
+  if (trimmed.length <= maxChars) return trimmed
+
+  const truncated = trimmed.substring(0, maxChars)
+  const lastSentenceEnd = Math.max(
+    truncated.lastIndexOf('.'),
+    truncated.lastIndexOf('!'),
+    truncated.lastIndexOf('?')
+  )
+
+  if (lastSentenceEnd > maxChars * 0.5) {
+    return truncated.substring(0, lastSentenceEnd + 1).trim()
+  }
+
+  const lastSpace = truncated.lastIndexOf(' ')
+  if (lastSpace > maxChars * 0.7) {
+    return truncated.substring(0, lastSpace).trim()
+  }
+
+  return truncated.trim()
 }

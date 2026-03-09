@@ -4,15 +4,45 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { getEvolutionProvider } from '@/lib/providers/evolution'
 import { followUpPrompt } from '@/lib/ai/prompts/sales-agent'
 import { getOrCreateConversation } from '@/lib/services/agent.service'
+import { truncateMessage } from '@/lib/utils/whatsapp-formatter'
 
 function getSupabase() { return createAdminClient() }
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!
 })
 
+function isBusinessHours(): boolean {
+  const now = new Date()
+  const brTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }))
+  const day = brTime.getDay()
+  const hour = brTime.getHours()
+
+  if (day === 0) return false // domingo
+  if (day === 6) return hour >= 9 && hour < 13 // sabado 9-13
+  return hour >= 9 && hour < 18 // seg-sex 9-18
+}
+
+function getNextBusinessHour(): Date {
+  const now = new Date()
+  const brNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }))
+  const next = new Date(brNow)
+
+  next.setHours(10, 0, 0, 0)
+
+  if (brNow.getHours() >= 18 || (brNow.getDay() === 6 && brNow.getHours() >= 13)) {
+    next.setDate(next.getDate() + 1)
+  }
+
+  // Pular domingo
+  while (next.getDay() === 0) {
+    next.setDate(next.getDate() + 1)
+  }
+
+  return next
+}
+
 export async function POST(request: NextRequest) {
   try {
-    // Verificar autorização (cron secret)
     const authHeader = request.headers.get('authorization')
     if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -20,7 +50,24 @@ export async function POST(request: NextRequest) {
 
     console.log('Processing follow-ups...')
 
-    // Buscar follow-ups pendentes que já passaram da hora agendada
+    if (!isBusinessHours()) {
+      const nextHour = getNextBusinessHour()
+      console.log(`Outside business hours. Next window: ${nextHour.toISOString()}`)
+
+      // Reagendar follow-ups pendentes para o próximo horário comercial
+      await getSupabase()
+        .from('dc_follow_ups')
+        .update({ scheduled_for: nextHour.toISOString() })
+        .eq('status', 'pending')
+        .lte('scheduled_for', new Date().toISOString())
+
+      return NextResponse.json({
+        processed: 0,
+        message: 'Outside business hours, rescheduled',
+        next_window: nextHour.toISOString()
+      })
+    }
+
     const { data: followUps, error } = await getSupabase()
       .from('dc_follow_ups')
       .select(`
@@ -103,6 +150,8 @@ Ficou com alguma dúvida? Posso te ajudar a escolher o modelo ideal!
           console.error(`No message generated for follow-up ${followUp.id}`)
           continue
         }
+
+        message = truncateMessage(message, 350)
 
         // Enviar mensagem via WhatsApp
         await evolution.sendText(followUp.lead.phone, message)

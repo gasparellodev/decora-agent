@@ -14,7 +14,7 @@ import {
   calculateWindowFreight,
   extractCepFromText
 } from '@/lib/providers/melhor-envio'
-import { processMessage, detectNonStandardMeasurement } from '@/lib/services/agent.service'
+import { processMessage } from '@/lib/services/agent.service'
 import { formatForML } from '@/lib/utils/ml-formatter'
 import type { MLWebhookNotification } from '@/types/mercadolivre'
 import type { AgentContext } from '@/types/agent'
@@ -252,24 +252,6 @@ export async function POST(request: NextRequest) {
       console.log('[ML Questions Webhook] Tokens usados:', tokensUsed)
       console.log('[ML Questions Webhook] Tools usadas:', toolsUsed)
 
-      // ===== DETECTAR MEDIDAS NÃO PADRÃO =====
-      const nonStandardCheck = detectNonStandardMeasurement(answerText, toolsUsed)
-      if (nonStandardCheck.isNonStandard) {
-        console.log('[ML Questions Webhook] ⚠️ MEDIDA NÃO PADRÃO DETECTADA:', nonStandardCheck.reason)
-        needsHumanReview = true
-        aiDisabledReason = nonStandardCheck.reason || 'Medida não padrão detectada'
-
-        // Desativar IA para este buyer
-        await supabase.from('dc_ml_conversations').upsert({
-          pack_id: `buyer_${buyerId}`,
-          buyer_id: buyerId,
-          buyer_name: question.from.nickname,
-          ai_enabled: false,
-          status: 'active'
-        }, { onConflict: 'buyer_id' })
-
-        console.log('[ML Questions Webhook] IA desativada para buyer:', buyerId)
-      }
     } else {
       // Fallback para template se IA falhar
       console.log('[ML Questions Webhook] ⚠️ Agente falhou, usando fallback')

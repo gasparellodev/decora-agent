@@ -4,6 +4,17 @@
 
 export type AgentChannel = 'whatsapp' | 'mercadolivre'
 
+export interface IncomingProductContext {
+  handle: string
+  productName?: string
+  productType?: string
+  color?: string
+  dimensions?: { width: number; height: number }
+  glassType?: string
+  orientation?: 'horizontal' | 'vertical'
+  sourceUrl: string
+}
+
 export interface AgentContext {
   channel: AgentChannel
   
@@ -30,12 +41,15 @@ export interface AgentContext {
     isSP: boolean
     estimatedDays: number
     carrier?: string
-    unitPrice?: number   // Preço unitário (para fora de SP)
-    quantity?: number    // Quantidade calculada
+    unitPrice?: number
+    quantity?: number
   }
   
   // Quantidade solicitada na pergunta
   quantity?: number
+  
+  // Contexto do produto quando lead vem do site (CIMA)
+  incomingProductContext?: IncomingProductContext
 }
 
 export interface ProcessMessageResult {

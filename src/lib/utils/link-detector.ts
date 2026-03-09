@@ -10,6 +10,7 @@ export type LinkType =
   | 'melhor_envio'
   | 'correios'
   | 'tracking'
+  | 'decora_product'
   | 'unknown'
 
 export interface DetectedLink {
@@ -82,6 +83,22 @@ const DOMAIN_PATTERNS: { pattern: RegExp; type: LinkType; idExtractor?: (url: st
       const match = url.match(/([A-Z]{2}\d{9}[A-Z]{2})/i)
       return match?.[1]
     }
+  },
+  // Decora Esquadrias - página de produto
+  {
+    pattern: /decoraesquadrias\.com\.br\/products\//i,
+    type: 'decora_product',
+    idExtractor: (url) => {
+      try {
+        const urlObj = new URL(url)
+        const pathParts = urlObj.pathname.split('/')
+        const productsIdx = pathParts.indexOf('products')
+        return productsIdx >= 0 ? pathParts[productsIdx + 1] : undefined
+      } catch {
+        const match = url.match(/\/products\/([^/?#]+)/i)
+        return match?.[1]
+      }
+    }
   }
 ]
 
@@ -150,6 +167,95 @@ export function detectTrackingCode(content: string): string | null {
 export function hasRelevantLinks(content: string): boolean {
   const links = detectLinks(content)
   return links.some(link => link.type !== 'unknown')
+}
+
+export interface DecorProductInfo {
+  handle: string
+  productName?: string
+  height?: number
+  width?: number
+  glassType?: string
+  color?: string
+  orientation?: 'horizontal' | 'vertical'
+  variant?: string
+  sourceUrl: string
+}
+
+/**
+ * Extrai informações do produto a partir de uma URL decoraesquadrias.com.br/products/...
+ * Query params comuns: variant, Altura, Largura, Vidro
+ */
+export function parseDecorProductUrl(url: string): DecorProductInfo | null {
+  try {
+    const urlObj = new URL(url)
+    if (!urlObj.hostname.includes('decoraesquadrias.com.br')) return null
+
+    const pathParts = urlObj.pathname.split('/')
+    const productsIdx = pathParts.indexOf('products')
+    if (productsIdx < 0 || !pathParts[productsIdx + 1]) return null
+
+    const handle = pathParts[productsIdx + 1]
+    const params = urlObj.searchParams
+
+    const heightStr = params.get('Altura') || params.get('altura')
+    const widthStr = params.get('Largura') || params.get('largura')
+    const glassType = params.get('Vidro') || params.get('vidro') || params.get('glass_type')
+    const color = params.get('Cor') || params.get('cor')
+    const variant = params.get('variant') || undefined
+
+    const height = heightStr ? parseInt(heightStr, 10) : undefined
+    const width = widthStr ? parseInt(widthStr, 10) : undefined
+
+    const productName = handleToProductName(handle)
+    const detectedColor = color || (handle.includes('preto') ? 'preto' : handle.includes('branco') ? 'branco' : undefined)
+
+    return {
+      handle,
+      productName,
+      height: height && !isNaN(height) ? height : undefined,
+      width: width && !isNaN(width) ? width : undefined,
+      glassType: glassType || undefined,
+      color: detectedColor,
+      orientation: height && width ? (height > width ? 'vertical' : 'horizontal') : undefined,
+      variant,
+      sourceUrl: url
+    }
+  } catch {
+    return null
+  }
+}
+
+function handleToProductName(handle: string): string {
+  const mapping: Record<string, string> = {
+    'janela-de-correr-duas-folhas-moveis': 'Janela 2 Folhas',
+    'janela-de-correr-tres-folhas': 'Janela 3 Folhas',
+    'janela-de-correr-2-folhas-com-grade': 'Janela 2 Folhas com Grade',
+    'janela-de-correr-3-folhas-com-grade': 'Janela 3 Folhas com Grade',
+    'janela-de-correr-3-folhas-com-tela': 'Janela 3 Folhas com Tela',
+    'janela-de-correr-3-folhas-com-tela-e-grade': 'Janela 3 Folhas com Tela e Grade',
+    'capelinha': 'Capelinha',
+    'capelinha-3-vidros': 'Capelinha 3 Vidros',
+    'kit-arremate': 'Kit Arremate'
+  }
+
+  for (const [key, name] of Object.entries(mapping)) {
+    if (handle.includes(key)) return name
+  }
+
+  return handle
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+}
+
+/**
+ * Detecta o primeiro link de produto Decora em uma mensagem
+ */
+export function findDecorProductLink(content: string): DecorProductInfo | null {
+  if (!content) return null
+  const links = detectLinks(content)
+  const decorLink = links.find(l => l.type === 'decora_product')
+  if (!decorLink) return null
+  return parseDecorProductUrl(decorLink.url)
 }
 
 /**
