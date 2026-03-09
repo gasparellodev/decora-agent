@@ -49,6 +49,9 @@ export async function POST(request: NextRequest) {
       case 'order.delivered':
         await handleOrderDelivered(resource)
         break
+      case 'transaction.payment.refused':
+        await handlePaymentRefused(resource)
+        break
       default:
         console.log(`Unhandled Yampi event: ${event}`)
     }
@@ -204,19 +207,45 @@ async function handleOrderCreated(order: any) {
       .eq('type', 'abandoned_cart')
       .eq('status', 'pending')
 
-    // Enviar confirmação
+    // Extrair detalhes do pedido
+    const items = order.items || order.skus?.data || []
+    const itemsText = items.map((i: any) =>
+      `• ${i.title || i.item_sku || 'Produto'}${(i.quantity || 1) > 1 ? ` x${i.quantity}` : ''}`
+    ).join('\n')
+
+    const address = order.shipping_address || order.address || {}
+    const addressText = address.street
+      ? `${address.street}, ${address.number || 'S/N'}${address.complement ? ' – ' + address.complement : ''} – ${address.neighborhood || ''}, ${address.city || ''}/${address.state || ''} – ${address.zipcode || ''}`
+      : ''
+
+    const transactions = order.transactions?.data || order.transactions || []
+    const transaction = transactions[0] || {}
+    const payment = transaction.payment?.data || transaction.payment || {}
+    const paymentMethod = payment.name || payment.alias || 'Não informado'
+    const isPix = (payment.alias || paymentMethod || '').toLowerCase().includes('pix')
+
+    const total = order.value_total || order.total || 0
+
+    // Montar mensagem detalhada
     const evolution = getEvolutionProvider()
     const firstName = customer.first_name || name.split(' ')[0] || 'Cliente'
 
-    const message = `Olá ${firstName}! 🎉
+    let message = `Olá, ${firstName}! 🎉 Que ótima escolha!\n\n`
+    message += `Seu pedido está reservado — só falta confirmar o pagamento para a gente colocar tudo em movimento!\n\n`
+    message += `🧾 *Pedido #${order.number}*\n`
+    if (itemsText) message += `${itemsText}\n`
+    message += `\n`
+    if (addressText) message += `📍 *Entrega:* ${addressText}\n`
+    message += `💳 *Forma de pagamento:* ${paymentMethod}`
+    if (transaction.installments && transaction.installments > 1) message += ` em ${transaction.installments}x`
+    message += `\n`
+    message += `💰 *Total:* R$ ${parseFloat(total).toFixed(2).replace('.', ',')}\n`
 
-Recebemos seu pedido #${order.number} da Decora Esquadrias!
+    if (isPix) {
+      message += `\n⚠️ Código PIX expirou? Sem problema — gere um novo pelo site ou escolha pagar com Boleto ou Cartão de Crédito.\n`
+    }
 
-O prazo de produção é de 5 a 7 dias úteis após a confirmação do pagamento.
-
-Qualquer dúvida, estamos à disposição!
-
-Obrigado pela preferência! 😊`
+    message += `\nSe você já pagou, fique tranquilo! A confirmação chegará em breve. 🚀`
 
     await evolution.sendText(phone, message)
 
@@ -383,6 +412,48 @@ Obrigado por escolher a Decora! 💙`
 
   } catch (error) {
     console.error('Error handling Yampi order delivered:', error)
+  }
+}
+
+async function handlePaymentRefused(data: any) {
+  try {
+    const order = data.order || data
+    const customer = order.customer || data.customer || {}
+    let phone = customer.phone || ''
+    phone = phone.replace(/\D/g, '')
+
+    if (!phone) return
+
+    const name = customer.first_name || customer.name || 'Cliente'
+    const orderNumber = order.number || data.order_number || ''
+
+    // Atualizar status do pedido
+    if (order.id) {
+      await getSupabase()
+        .from('dc_orders')
+        .update({ status: 'pagamento_recusado' })
+        .eq('external_id', order.id?.toString())
+        .eq('source', 'yampi')
+    }
+
+    const evolution = getEvolutionProvider()
+    const message = `Olá, ${name}! 😊
+
+Notamos que houve um problema com o pagamento do seu pedido${orderNumber ? ` #${orderNumber}` : ''}.
+
+Não se preocupe — seu pedido continua reservado! Você pode tentar novamente com:
+• *PIX* (5% de desconto)
+• *Cartão de Crédito* (até 10x)
+• *Boleto Bancário*
+
+Se precisar de ajuda, é só me chamar! 💬`
+
+    await evolution.sendText(phone, message)
+
+    console.log(`Payment refused notification sent for order ${orderNumber}`)
+
+  } catch (error) {
+    console.error('Error handling Yampi payment refused:', error)
   }
 }
 
