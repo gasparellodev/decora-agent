@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getOrCreateConversation, upsertLead } from '@/lib/services/agent.service'
-import { bufferMessage, onTypingStarted, onTypingStopped } from '@/lib/services/message-buffer.service'
+import { onTypingStarted, onTypingStopped } from '@/lib/services/message-buffer.service'
+import { processMessage } from '@/lib/services/agent.service'
+import type { AgentContext } from '@/types/agent'
 import { processMedia, MediaType } from '@/lib/services/media-processor.service'
 import { getEvolutionProvider } from '@/lib/providers/evolution'
 import { findDecorProductLink } from '@/lib/utils/link-detector'
@@ -279,14 +281,18 @@ async function handleMessageUpsert(payload: any) {
       }
     }
 
-    // Adicionar ao buffer de mensagens (não bloqueia o webhook)
-    setImmediate(() => {
-      try {
-        bufferMessage(lead, conversation, content, mediaType || undefined, productContext)
-      } catch (error) {
-        console.error('Error buffering message:', error)
+    // Processar mensagem diretamente (serverless não suporta timers em background)
+    try {
+      const context: AgentContext = {
+        channel: 'whatsapp',
+        leadId: lead.id,
+        conversationId: conversation.id,
+        incomingProductContext: productContext
       }
-    })
+      await processMessage(content, context, lead, conversation)
+    } catch (error) {
+      console.error('Error processing message:', error)
+    }
 
     return NextResponse.json({ ok: true, lead_id: lead.id, conversation_id: conversation.id })
 

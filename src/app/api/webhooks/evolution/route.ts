@@ -282,15 +282,17 @@ async function handleMessageUpsert(payload: any) {
       }
     }
 
-    // Adicionar ao buffer de mensagens (processa após 3s de inatividade)
-    // Isso agrupa mensagens enviadas em sequência
-    setImmediate(() => {
-      try {
-        bufferMessage(lead, conversation, content, mediaType || undefined)
-      } catch (error) {
-        console.error('Error buffering message:', error)
-      }
-    })
+    // Processar mensagem diretamente (serverless não suporta timers em background)
+    try {
+      const { processMessage: processMsg } = await import('@/lib/services/agent.service')
+      await processMsg(content, {
+        channel: 'whatsapp',
+        leadId: lead.id,
+        conversationId: conversation.id,
+      }, lead, conversation)
+    } catch (error) {
+      console.error('Error processing message:', error)
+    }
 
     return NextResponse.json({ ok: true, lead_id: lead.id, conversation_id: conversation.id })
 
