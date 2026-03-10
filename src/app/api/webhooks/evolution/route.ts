@@ -204,13 +204,20 @@ async function handleMessageUpsert(payload: any) {
     }
 
     // Ignorar leads pre-existentes (criados antes da ativacao do agente)
+    // Numeros admin (WHATSAPP_WHITELIST) sempre passam
     const cutoffDate = process.env.AGENT_CUTOFF_DATE
     if (cutoffDate && lead.created_at) {
-      const cutoff = new Date(cutoffDate)
-      const leadCreated = new Date(lead.created_at)
-      if (leadCreated < cutoff) {
-        console.log(`[CUTOFF] Lead ${phone} criado em ${lead.created_at} (antes do cutoff ${cutoffDate}) - ignorando`)
-        return NextResponse.json({ ok: true, skipped: 'pre_existing_lead' })
+      const adminNumbers = process.env.WHATSAPP_WHITELIST?.split(',').map(n => n.trim().replace(/\D/g, '')).filter(Boolean) || []
+      const normalizedPhone = phone.replace(/\D/g, '')
+      const isAdmin = adminNumbers.some(n => normalizedPhone.endsWith(n) || n.endsWith(normalizedPhone))
+
+      if (!isAdmin) {
+        const cutoff = new Date(cutoffDate)
+        const leadCreated = new Date(lead.created_at)
+        if (leadCreated < cutoff) {
+          console.log(`[CUTOFF] Lead ${phone} criado em ${lead.created_at} (antes do cutoff ${cutoffDate}) - ignorando`)
+          return NextResponse.json({ ok: true, skipped: 'pre_existing_lead' })
+        }
       }
     }
 
